@@ -1,4 +1,5 @@
 #include "SlidingWindowFilter.h"
+#include "ConvolutionPolicy.h"
 #include "../core/Policies.h"
 
 using namespace dsp::utils;
@@ -236,4 +237,8 @@ namespace dsp::utils
 
     // WAMP,SSC instantiations
     template class dsp::utils::SlidingWindowFilter<bool, CounterPolicy>;
+
+    // ConvolutionPolicy instantiations
+    template class SlidingWindowFilter<float, ConvolutionPolicy<float>>;
+    template class SlidingWindowFilter<double, ConvolutionPolicy<double>>;
 }

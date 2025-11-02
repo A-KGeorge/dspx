@@ -36,7 +36,7 @@
     "audio",
     "biosignal"
   ],
-  "author": "",
+  "author": "Alan Kochukalam George",
   "license": "MIT",
   "type": "module",
   "dependencies": {

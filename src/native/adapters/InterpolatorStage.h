@@ -2,200 +2,266 @@
  * InterpolatorStage.h
  *
  * Polyphase FIR interpolator for efficient upsampling by integer factor L.
- * Inserts (L-1) zero samples between each input sample and applies anti-imaging
- * low-pass filter to smooth the result.
- *
- * Algorithm:
- * 1. Insert L-1 zeros between input samples (zero-stuffing)
- * 2. Design anti-imaging FIR filter with cutoff at π/L
- * 3. Use polyphase decomposition for efficiency (avoids computing on zeros)
- * 4. Maintain state across process() calls for streaming
- *
- * Efficiency: Polyphase structure avoids multiplying by zeros, reducing
- * computation significantly.
+ * Implements anti-imaging filter to remove spectral images above Fs_in/2.
  */
 
 #pragma once
 
 #include "../IDspStage.h"
-#include "../core/FirFilter.h"
-#include <algorithm>
+#include <vector>
 #include <cmath>
 #include <stdexcept>
-#include <vector>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace dsp
 {
-
-    /**
-     * Interpolator stage: Upsample signal by integer factor L
-     * Includes anti-imaging FIR low-pass filter
-     */
     class InterpolatorStage : public IDspStage
     {
     public:
-        /**
-         * Construct interpolator
-         * @param factor Interpolation factor L (output rate = input rate * L)
-         * @param order FIR filter order (must be odd)
-         * @param sampleRate Input sample rate in Hz
-         */
         InterpolatorStage(int factor, int order, double sampleRate)
-            : interpolationFactor_(factor), filterOrder_(order), sampleRate_(sampleRate), phaseIndex_(0)
+            : interpolationFactor_(factor), filterOrder_(order), sampleRate_(sampleRate),
+              numChannels_(0)
         {
-            if (factor < 2)
+            if (interpolationFactor_ < 2)
             {
                 throw std::invalid_argument("Interpolation factor must be >= 2");
             }
-            if (order < 3 || order % 2 == 0)
+            if (filterOrder_ < 3 || filterOrder_ % 2 == 0)
             {
                 throw std::invalid_argument("Filter order must be odd and >= 3");
             }
 
-            // Design anti-imaging filter: cutoff at Fs/(2*L) to prevent imaging
-            double outputSampleRate = sampleRate * factor;
-            double cutoffFreq = sampleRate / 2.0; // Nyquist of input rate
-
-            // Create FIR low-pass filter (operates at output rate)
-            filter_ = std::make_unique<FirFilter>(order, outputSampleRate);
-            designLowPassFilter(cutoffFreq, outputSampleRate);
-
-            // State buffer for polyphase filtering
-            stateBuffer_.resize(filterOrder_, 0.0f);
-            stateIndex_ = 0;
+            // Design anti-imaging filter (low-pass at Fs_in / 2)
+            designLowPassFilter();
         }
 
-        /**
-         * Process input samples and produce interpolated output
-         * Output size will be input size * L
-         */
-        void process(const float *input, size_t inputSize,
-                     float *output, size_t &outputSize) override
+        const char *getType() const override
         {
-            outputSize = 0;
+            return "interpolate";
+        }
 
-            if (inputSize == 0)
+        bool isResizing() const override
+        {
+            return true;
+        }
+
+        double getTimeScaleFactor() const override
+        {
+            // Interpolation slows down time (stretches signal)
+            // Output has MORE samples, so timestamps are scaled DOWN
+            return 1.0 / static_cast<double>(interpolationFactor_);
+        }
+
+        size_t calculateOutputSize(size_t inputSize) const override
+        {
+            return inputSize * interpolationFactor_;
+        }
+
+        void processResizing(const float *inputBuffer, size_t inputSize,
+                             float *outputBuffer, size_t &outputSize,
+                             int numChannels, const float *timestamps = nullptr) override
+        {
+            // Initialize state buffers for new channel configuration if needed
+            if (numChannels_ != numChannels)
             {
-                return;
+                initializeStateBuffers(numChannels);
             }
 
-            // Process each input sample, producing L output samples
-            for (size_t i = 0; i < inputSize; ++i)
+            size_t inputSamplesPerChannel = inputSize / numChannels;
+            size_t outputSamplesPerChannel = inputSamplesPerChannel * interpolationFactor_;
+            outputSize = outputSamplesPerChannel * numChannels;
+
+            // Process each channel independently
+            for (int ch = 0; ch < numChannels; ++ch)
             {
-                // Add input sample to state buffer
-                stateBuffer_[stateIndex_] = input[i];
-                stateIndex_ = (stateIndex_ + 1) % filterOrder_;
-
-                // Generate L output samples using polyphase filter
-                for (int phase = 0; phase < interpolationFactor_; ++phase)
-                {
-                    float sum = 0.0f;
-
-                    // Apply polyphase filter coefficients
-                    // Each phase uses every L-th coefficient
-                    for (int tap = 0; tap < filterOrder_; ++tap)
-                    {
-                        int bufferIdx = (stateIndex_ - 1 - tap + filterOrder_) % filterOrder_;
-                        int coeffIdx = phase + tap * interpolationFactor_;
-
-                        if (coeffIdx < filterOrder_ * interpolationFactor_)
-                        {
-                            sum += stateBuffer_[bufferIdx] * polyphaseCoeffs_[coeffIdx];
-                        }
-                    }
-
-                    output[outputSize++] = sum * interpolationFactor_; // Gain correction
-                }
+                processChannel(inputBuffer, inputSamplesPerChannel,
+                               outputBuffer, outputSamplesPerChannel,
+                               ch, numChannels);
             }
+        }
+
+        void process(float *buffer, size_t numSamples, int numChannels = 1,
+                     const float *timestamps = nullptr) override
+        {
+            throw std::runtime_error("InterpolatorStage: Should use processResizing, not in-place process");
         }
 
         void reset() override
         {
-            std::fill(stateBuffer_.begin(), stateBuffer_.end(), 0.0f);
-            stateIndex_ = 0;
-            phaseIndex_ = 0;
+            for (auto &buf : stateBuffers_)
+            {
+                std::fill(buf.begin(), buf.end(), 0.0f);
+            }
+            std::fill(stateIndices_.begin(), stateIndices_.end(), 0);
         }
 
-        std::string getName() const override
+        Napi::Object serializeState(Napi::Env env) const override
         {
-            return "Interpolator(L=" + std::to_string(interpolationFactor_) + ")";
+            Napi::Object state = Napi::Object::New(env);
+            state.Set("type", "interpolate");
+            state.Set("factor", interpolationFactor_);
+            state.Set("order", filterOrder_);
+            state.Set("sampleRate", sampleRate_);
+
+            // Serialize state buffers
+            Napi::Array stateBuffersArray = Napi::Array::New(env, stateBuffers_.size());
+            for (size_t ch = 0; ch < stateBuffers_.size(); ++ch)
+            {
+                Napi::Array channelBuffer = Napi::Array::New(env, stateBuffers_[ch].size());
+                for (size_t i = 0; i < stateBuffers_[ch].size(); ++i)
+                {
+                    channelBuffer.Set(i, stateBuffers_[ch][i]);
+                }
+                stateBuffersArray.Set(ch, channelBuffer);
+            }
+            state.Set("stateBuffers", stateBuffersArray);
+
+            Napi::Array stateIndicesArray = Napi::Array::New(env, stateIndices_.size());
+            for (size_t ch = 0; ch < stateIndices_.size(); ++ch)
+            {
+                stateIndicesArray.Set(ch, static_cast<uint32_t>(stateIndices_[ch]));
+            }
+            state.Set("stateIndices", stateIndicesArray);
+
+            return state;
         }
 
-        /**
-         * Get interpolation factor
-         */
-        int getFactor() const
+        void deserializeState(const Napi::Object &state) override
         {
-            return interpolationFactor_;
-        }
+            if (state.Has("stateBuffers"))
+            {
+                Napi::Array stateBuffersArray = state.Get("stateBuffers").As<Napi::Array>();
+                for (size_t ch = 0; ch < stateBuffersArray.Length() && ch < stateBuffers_.size(); ++ch)
+                {
+                    Napi::Array channelBuffer = stateBuffersArray.Get(ch).As<Napi::Array>();
+                    for (size_t i = 0; i < channelBuffer.Length() && i < stateBuffers_[ch].size(); ++i)
+                    {
+                        stateBuffers_[ch][i] = channelBuffer.Get(i).As<Napi::Number>().FloatValue();
+                    }
+                }
+            }
 
-        /**
-         * Get filter order
-         */
-        int getOrder() const
-        {
-            return filterOrder_;
+            if (state.Has("stateIndices"))
+            {
+                Napi::Array stateIndicesArray = state.Get("stateIndices").As<Napi::Array>();
+                for (size_t ch = 0; ch < stateIndicesArray.Length() && ch < stateIndices_.size(); ++ch)
+                {
+                    stateIndices_[ch] = stateIndicesArray.Get(ch).As<Napi::Number>().Uint32Value();
+                }
+            }
         }
 
     private:
-        /**
-         * Design anti-imaging low-pass filter using windowed sinc method
-         * Creates polyphase decomposition of filter
-         */
-        void designLowPassFilter(double cutoffFreq, double outputSampleRate)
-        {
-            const int M = filterOrder_;
-            const int L = interpolationFactor_;
-            const int totalTaps = M * L;
-
-            polyphaseCoeffs_.resize(totalTaps);
-
-            const int center = totalTaps / 2;
-            const double fc = cutoffFreq / outputSampleRate;
-            const double omega_c = 2.0 * M_PI * fc;
-
-            // Design prototype filter at output rate
-            for (int n = 0; n < totalTaps; ++n)
-            {
-                // Sinc function
-                double t = n - center;
-                double sinc_val;
-                if (std::abs(t) < 1e-10)
-                {
-                    sinc_val = omega_c / M_PI;
-                }
-                else
-                {
-                    sinc_val = std::sin(omega_c * t) / (M_PI * t);
-                }
-
-                // Hamming window
-                double window = 0.54 - 0.46 * std::cos(2.0 * M_PI * n / (totalTaps - 1));
-
-                polyphaseCoeffs_[n] = static_cast<float>(sinc_val * window);
-            }
-
-            // Normalize coefficients
-            float sum = 0.0f;
-            for (float c : polyphaseCoeffs_)
-            {
-                sum += c;
-            }
-            for (float &c : polyphaseCoeffs_)
-            {
-                c /= sum;
-            }
-        }
-
         int interpolationFactor_;
         int filterOrder_;
         double sampleRate_;
+        int numChannels_;
 
-        std::unique_ptr<FirFilter> filter_;
-        std::vector<float> stateBuffer_;
-        std::vector<float> polyphaseCoeffs_;
-        size_t stateIndex_;
-        int phaseIndex_;
+        std::vector<float> filterCoeffs_;
+        std::vector<std::vector<float>> stateBuffers_; // One per channel
+        std::vector<size_t> stateIndices_;             // One per channel
+
+        void initializeStateBuffers(int numChannels)
+        {
+            numChannels_ = numChannels;
+            stateBuffers_.resize(numChannels);
+            stateIndices_.resize(numChannels);
+
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                stateBuffers_[ch].resize(filterOrder_, 0.0f);
+                stateIndices_[ch] = 0;
+            }
+        }
+
+        void designLowPassFilter()
+        {
+            // Design windowed-sinc FIR anti-imaging filter
+            // Cutoff at Fs_in / 2 (same frequency as input Nyquist)
+            // The upsampling inserts zeros, so we need to filter out images above Fs_in/2
+
+            filterCoeffs_.resize(filterOrder_);
+            int M = filterOrder_ / 2;
+
+            // Cutoff frequency normalized to output sample rate
+            // Original Nyquist: sampleRate_ / 2
+            // New sample rate: sampleRate_ * interpolationFactor_
+            // Normalized cutoff: (sampleRate_ / 2) / (sampleRate_ * interpolationFactor_) = 1 / (2 * interpolationFactor_)
+            double fc = 1.0 / (2.0 * interpolationFactor_);
+
+            for (int n = 0; n < filterOrder_; ++n)
+            {
+                int nMinusM = n - M;
+
+                // Sinc function
+                double sinc;
+                if (nMinusM == 0)
+                {
+                    sinc = 2.0 * fc;
+                }
+                else
+                {
+                    double x = 2.0 * M_PI * fc * nMinusM;
+                    sinc = std::sin(x) / (M_PI * nMinusM);
+                }
+
+                // Hamming window
+                double window = 0.54 - 0.46 * std::cos(2.0 * M_PI * n / (filterOrder_ - 1));
+
+                // Apply gain correction for interpolation (L samples out per 1 in)
+                filterCoeffs_[n] = static_cast<float>(sinc * window * interpolationFactor_);
+            }
+        }
+
+        void processChannel(const float *inputBuffer, size_t inputSamplesPerChannel,
+                            float *outputBuffer, size_t outputSamplesPerChannel,
+                            int channel, int numChannels)
+        {
+            auto &state = stateBuffers_[channel];
+            size_t &stateIdx = stateIndices_[channel];
+
+            size_t outIdx = 0;
+
+            // Process each input sample
+            for (size_t i = 0; i < inputSamplesPerChannel; ++i)
+            {
+                // Get input sample (interleaved format)
+                float inputSample = inputBuffer[i * numChannels + channel];
+
+                // Insert input sample into state buffer
+                state[stateIdx] = inputSample;
+                stateIdx = (stateIdx + 1) % filterOrder_;
+
+                // Generate L output samples for this input sample
+                for (int phase = 0; phase < interpolationFactor_; ++phase)
+                {
+                    float output = 0.0f;
+
+                    // Apply polyphase filter
+                    // Only use coefficients at positions where upsampled signal would have non-zero values
+                    for (int k = 0; k < filterOrder_; ++k)
+                    {
+                        // Which phase does this coefficient correspond to?
+                        // For interpolation: insert (L-1) zeros between samples
+                        // Polyphase decomposition: filter[k] applies to input at position floor(k/L)
+
+                        if (k % interpolationFactor_ == phase)
+                        {
+                            // This coefficient contributes to this phase
+                            size_t statePosition = (stateIdx + filterOrder_ - 1 - k / interpolationFactor_) % filterOrder_;
+                            output += filterCoeffs_[k] * state[statePosition];
+                        }
+                    }
+
+                    // Write output sample (interleaved format)
+                    outputBuffer[outIdx * numChannels + channel] = output;
+                    outIdx++;
+                }
+            }
+        }
     };
 
 } // namespace dsp

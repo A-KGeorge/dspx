@@ -54,6 +54,7 @@ FirFilter<T> createBandStop(T lowCutoff, T highCutoff, size_t numTaps, std::stri
 - `processSample(T sample)` - Process single sample with feedback
 - `process(const T* input, T* output, size_t length, bool stateless)` - Batch processing
 - `reset()` - Clear input/output history
+- `getOrder()` - Get maximum order (max of feedforward and feedback orders)
 - `getFeedforwardOrder()` - Get order of feedforward coefficients (b)
 - `getFeedbackOrder()` - Get order of feedback coefficients (a)
 - `getBCoefficients()` - Get feedforward (numerator) coefficients
@@ -191,11 +192,14 @@ Outputs: [0.2066, 0.6961, 1.0430, 1.0754, 0.8129, 0.2964, -0.0497, -0.0764]
 
 ## Frequency Specifications
 
-All cutoff frequencies are **normalized** (0 to 0.5):
+All cutoff frequencies are **normalized** (0 to 1.0):
 
 - `cutoffFreq = desiredFreq / sampleRate`
 - Example: 100 Hz cutoff at 1000 Hz sample rate = 0.1
-- Nyquist frequency (sampleRate/2) = 0.5
+- Nyquist frequency (sampleRate/2) = 0.5 normalized
+- **Valid range**: (0, 1.0] where 1.0 = Nyquist frequency
+
+**Important:** The cutoff frequency validation was corrected to allow values up to 1.0 (previously incorrectly limited to < 0.5). This fix enables proper design of filters with cutoff frequencies approaching the Nyquist frequency.
 
 ## Next Steps (Not Yet Implemented)
 

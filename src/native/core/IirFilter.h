@@ -97,6 +97,19 @@ namespace dsp
              */
             bool isStable() const;
 
+            /**
+             * Get internal state (for serialization)
+             * @return Pair of (x_state, y_state) vectors
+             */
+            std::pair<std::vector<T>, std::vector<T>> getState() const;
+
+            /**
+             * Set internal state (for deserialization)
+             * @param x_state Input history buffer
+             * @param y_state Output history buffer
+             */
+            void setState(const std::vector<T> &x_state, const std::vector<T> &y_state);
+
             // ========== Common IIR Filter Designs ==========
 
             /**
@@ -202,6 +215,15 @@ namespace dsp
              * s -> 2/T * (1 - z^-1) / (1 + z^-1)
              */
             static void bilinearTransform(T wc, int order, std::vector<T> &b, std::vector<T> &a);
+
+            /**
+             * Cascade two IIR filters by convolving their transfer functions
+             * Result: H(z) = H1(z) * H2(z)
+             * @param filter1 First filter
+             * @param filter2 Second filter
+             * @return Cascaded filter with combined coefficients
+             */
+            static IirFilter<T> cascadeFilters(const IirFilter<T> &filter1, const IirFilter<T> &filter2);
         };
 
     } // namespace core

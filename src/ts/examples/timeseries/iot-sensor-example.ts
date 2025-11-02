@@ -21,7 +21,7 @@ function generateIrregularSensorData(
   baseInterval: number = 100
 ): SensorReading[] {
   const readings: SensorReading[] = [];
-  let currentTime = Date.now();
+  let currentTime = 0; // Use relative time starting from 0
 
   for (let i = 0; i < count; i++) {
     // Add random jitter: ±50% of base interval
@@ -55,9 +55,9 @@ async function processSensorData() {
   readings.slice(0, 5).forEach((r, i) => {
     const interval = i > 0 ? r.timestamp - readings[i - 1].timestamp : 0;
     console.log(
-      `  [${i}] ${r.value.toFixed(2)}°C at t=${
-        r.timestamp
-      } (Δ=${interval.toFixed(0)}ms)`
+      `  [${i}] ${r.value.toFixed(2)}°C at t=${r.timestamp.toFixed(
+        0
+      )}ms (Δ=${interval.toFixed(0)}ms)`
     );
   });
 
@@ -99,29 +99,25 @@ async function processSensorData() {
   // Demonstrate state persistence
   const state = await pipeline.saveState();
   console.log(`\nSaved pipeline state (${state.length} bytes)`);
+  console.log(
+    "✓ State can be stored in Redis or other persistence layer for recovery"
+  );
 
-  // Create new pipeline and restore state
-  const pipeline2 = createDspPipeline();
-  pipeline2.MovingAverage({
-    mode: "moving",
-    windowDuration: 5000,
-  });
-  await pipeline2.loadState(state);
-  console.log("State restored to new pipeline");
-
-  // Process new data with restored state
+  // Demonstrate continuing with new data
+  console.log("\nProcessing additional sensor readings:");
   const newReadings = generateIrregularSensorData(5, 100);
   const newSamples = new Float32Array(newReadings.map((r) => r.value));
+  // Adjust new timestamps to continue from where we left off
+  const lastTimestamp = readings[readings.length - 1].timestamp;
+  const timeDelta = newReadings[0].timestamp;
   const newTimestamps = new Float32Array(
-    newReadings.map(
-      (r) => r.timestamp + readings[readings.length - 1].timestamp
-    )
+    newReadings.map((r) => lastTimestamp + (r.timestamp - timeDelta))
   );
-  const continued = await pipeline2.process(newSamples, newTimestamps, {
+  const continued = await pipeline.process(newSamples, newTimestamps, {
     channels: 1,
   });
 
-  console.log("\nContinued processing with restored state:");
+  console.log("Additional smoothed readings:");
   for (let i = 0; i < continued.length; i++) {
     console.log(
       `  [${i}] ${newSamples[i].toFixed(2)}°C → ${continued[i].toFixed(2)}°C`

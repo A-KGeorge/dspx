@@ -24,7 +24,7 @@ function generateEMGDataWithDrift() {
   const nominalRate = 1000; // 1000 Hz target
   const nominalInterval = 1000 / nominalRate; // 1ms
 
-  let currentTime = Date.now();
+  let currentTime = 0; // Start from 0 instead of Date.now()
 
   for (let i = 0; i < 1000; i++) {
     // Simulate EMG signal (muscle activation)

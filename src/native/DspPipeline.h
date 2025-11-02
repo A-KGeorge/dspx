@@ -18,6 +18,7 @@ namespace dsp
     private:
         // This is the "factory" method called by the TS builder
         Napi::Value AddStage(const Napi::CallbackInfo &info);
+        Napi::Value AddFilterStage(const Napi::CallbackInfo &info);
 
         // This is the async "process" method called by the TS processor
         Napi::Value ProcessAsync(const Napi::CallbackInfo &info);

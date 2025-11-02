@@ -469,10 +469,10 @@ export interface HjorthParams {
 export interface DecimateParams {
   /** Decimation factor M (output rate = input rate / M) */
   factor: number;
-  /** Apply anti-aliasing filter before decimation (default: true) */
-  useAntiAliasingFilter?: boolean;
-  /** FIR filter order for anti-aliasing (default: auto-calculated) */
-  filterOrder?: number;
+  /** Input sample rate in Hz */
+  sampleRate: number;
+  /** FIR filter order for anti-aliasing (default: 51, must be odd) */
+  order?: number;
 }
 
 /**
@@ -481,10 +481,10 @@ export interface DecimateParams {
 export interface InterpolateParams {
   /** Interpolation factor L (output rate = input rate * L) */
   factor: number;
-  /** Apply anti-imaging filter after interpolation (default: true) */
-  useAntiImagingFilter?: boolean;
-  /** FIR filter order for anti-imaging (default: auto-calculated) */
-  filterOrder?: number;
+  /** Input sample rate in Hz */
+  sampleRate: number;
+  /** FIR filter order for anti-imaging (default: 51, must be odd) */
+  order?: number;
 }
 
 /**
@@ -492,13 +492,46 @@ export interface InterpolateParams {
  */
 export interface ResampleParams {
   /** Interpolation factor L */
-  upsampleFactor: number;
+  upFactor: number;
   /** Decimation factor M (new rate = old rate * L / M) */
-  downsampleFactor: number;
-  /** Apply combined anti-aliasing/anti-imaging filter (default: true) */
-  useFilter?: boolean;
-  /** FIR filter order (default: auto-calculated) */
-  filterOrder?: number;
+  downFactor: number;
+  /** Input sample rate in Hz */
+  sampleRate: number;
+  /** FIR filter order (default: 51, must be odd) */
+  order?: number;
+}
+
+/**
+ * Parameters for adding a Convolution stage
+ * Applies a custom 1D kernel to the signal
+ */
+export interface ConvolutionParams {
+  /**
+   * The 1D convolution kernel (filter coefficients)
+   * Must be a 1D array or Float32Array
+   */
+  kernel: Float32Array | number[];
+
+  /**
+   * Processing mode
+   * - 'moving': (Default) Stateful, streaming convolution with state persistence
+   * - 'batch': Stateless, convolves each chunk independently
+   */
+  mode?: "moving" | "batch";
+
+  /**
+   * Convolution method selection
+   * - 'auto': (Default) Smart selection between direct and FFT based on kernel size
+   * - 'direct': Force time-domain O(N*M) convolution (fast for small kernels)
+   * - 'fft': Force frequency-domain O(N*logN) convolution (fast for large kernels)
+   */
+  method?: "auto" | "direct" | "fft";
+
+  /**
+   * Kernel size threshold for auto mode (default: 64)
+   * Kernels smaller than this use direct convolution, larger use FFT
+   */
+  autoThreshold?: number;
 }
 
 /**

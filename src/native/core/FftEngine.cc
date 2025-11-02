@@ -372,7 +372,7 @@ namespace dsp
 
             for (size_t s = 1; s <= logN; ++s)
             {
-                size_t halfLen = 1 << (s - 1);
+                size_t halfLen = 1ULL << (s - 1);
                 size_t len = 2 * halfLen;
                 const auto &twiddles = m_twiddleFactors; // Always use forward twiddles
                 size_t twiddle_step = m_size / len;

@@ -14,6 +14,10 @@ import type {
   WaveformLengthParams,
   SlopeSignChangeParams,
   WillisonAmplitudeParams,
+  InterpolateParams,
+  DecimateParams,
+  ResampleParams,
+  ConvolutionParams,
   PipelineCallbacks,
   LogEntry,
   SampleBatch,
@@ -554,6 +558,223 @@ class DspProcessor {
   }
 
   /**
+   * Interpolate (upsample) the signal by an integer factor L
+   * Increases the sample rate by inserting zeros and applying anti-imaging filter
+   * Uses efficient polyphase FIR filtering
+   *
+   * @param params - Configuration for interpolation
+   * @param params.factor - Interpolation factor L (output rate = input rate * L)
+   * @param params.sampleRate - Input sample rate in Hz
+   * @param params.order - FIR filter order (default: 51, must be odd)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Upsample from 8 kHz to 16 kHz
+   * pipeline.Interpolate({ factor: 2, sampleRate: 8000 });
+   *
+   * @example
+   * // Upsample with custom filter order
+   * pipeline.Interpolate({ factor: 4, sampleRate: 1000, order: 101 });
+   */
+  Interpolate(params: InterpolateParams): this {
+    if (params.factor < 2 || !Number.isInteger(params.factor)) {
+      throw new TypeError(
+        `Interpolate: factor must be an integer >= 2, got ${params.factor}`
+      );
+    }
+    if (params.sampleRate <= 0) {
+      throw new TypeError(
+        `Interpolate: sampleRate must be positive, got ${params.sampleRate}`
+      );
+    }
+    if (
+      params.order !== undefined &&
+      (params.order < 3 || params.order % 2 === 0)
+    ) {
+      throw new TypeError(
+        `Interpolate: order must be odd and >= 3, got ${params.order}`
+      );
+    }
+    this.nativeInstance.addStage("interpolate", params);
+    this.stages.push(`interpolate:${params.factor}`);
+    return this;
+  }
+
+  /**
+   * Decimate (downsample) the signal by an integer factor M
+   * Reduces the sample rate by applying anti-aliasing filter and keeping every M-th sample
+   * Uses efficient polyphase FIR filtering
+   *
+   * @param params - Configuration for decimation
+   * @param params.factor - Decimation factor M (output rate = input rate / M)
+   * @param params.sampleRate - Input sample rate in Hz
+   * @param params.order - FIR filter order (default: 51, must be odd)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Downsample from 16 kHz to 8 kHz
+   * pipeline.Decimate({ factor: 2, sampleRate: 16000 });
+   *
+   * @example
+   * // Downsample with custom filter order
+   * pipeline.Decimate({ factor: 4, sampleRate: 8000, order: 101 });
+   */
+  Decimate(params: DecimateParams): this {
+    if (params.factor < 2 || !Number.isInteger(params.factor)) {
+      throw new TypeError(
+        `Decimate: factor must be an integer >= 2, got ${params.factor}`
+      );
+    }
+    if (params.sampleRate <= 0) {
+      throw new TypeError(
+        `Decimate: sampleRate must be positive, got ${params.sampleRate}`
+      );
+    }
+    if (
+      params.order !== undefined &&
+      (params.order < 3 || params.order % 2 === 0)
+    ) {
+      throw new TypeError(
+        `Decimate: order must be odd and >= 3, got ${params.order}`
+      );
+    }
+    this.nativeInstance.addStage("decimate", params);
+    this.stages.push(`decimate:${params.factor}`);
+    return this;
+  }
+
+  /**
+   * Resample the signal by a rational factor L/M
+   * Changes sample rate by combining interpolation and decimation
+   * Uses efficient polyphase FIR filtering with automatic GCD reduction
+   *
+   * @param params - Configuration for resampling
+   * @param params.upFactor - Interpolation factor L
+   * @param params.downFactor - Decimation factor M (output rate = input rate * L / M)
+   * @param params.sampleRate - Input sample rate in Hz
+   * @param params.order - FIR filter order (default: 51, must be odd)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Resample from 44.1 kHz to 48 kHz
+   * pipeline.Resample({ upFactor: 160, downFactor: 147, sampleRate: 44100 });
+   *
+   * @example
+   * // Resample from 8 kHz to 11.025 kHz
+   * pipeline.Resample({ upFactor: 441, downFactor: 320, sampleRate: 8000 });
+   */
+  Resample(params: ResampleParams): this {
+    if (params.upFactor < 1 || !Number.isInteger(params.upFactor)) {
+      throw new TypeError(
+        `Resample: upFactor must be a positive integer, got ${params.upFactor}`
+      );
+    }
+    if (params.downFactor < 1 || !Number.isInteger(params.downFactor)) {
+      throw new TypeError(
+        `Resample: downFactor must be a positive integer, got ${params.downFactor}`
+      );
+    }
+    if (params.sampleRate <= 0) {
+      throw new TypeError(
+        `Resample: sampleRate must be positive, got ${params.sampleRate}`
+      );
+    }
+    if (
+      params.order !== undefined &&
+      (params.order < 3 || params.order % 2 === 0)
+    ) {
+      throw new TypeError(
+        `Resample: order must be odd and >= 3, got ${params.order}`
+      );
+    }
+    this.nativeInstance.addStage("resample", params);
+    this.stages.push(`resample:${params.upFactor}/${params.downFactor}`);
+    return this;
+  }
+
+  /**
+   * Add a convolution stage to the pipeline
+   * Applies a custom 1D kernel to the signal using either direct or FFT-based convolution
+   *
+   * @param params - Convolution parameters
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Simple smoothing kernel
+   * const smoothKernel = new Float32Array([0.2, 0.6, 0.2]);
+   * pipeline.convolution({ kernel: smoothKernel });
+   *
+   * @example
+   * // Gaussian kernel with explicit method
+   * const gaussianKernel = new Float32Array([0.06, 0.24, 0.4, 0.24, 0.06]);
+   * pipeline.convolution({
+   *   kernel: gaussianKernel,
+   *   mode: "moving",
+   *   method: "direct"
+   * });
+   *
+   * @example
+   * // Large kernel with FFT convolution
+   * const largeKernel = new Float32Array(128).fill(1/128); // Moving average
+   * pipeline.convolution({
+   *   kernel: largeKernel,
+   *   method: "fft" // Force FFT for large kernel
+   * });
+   *
+   * @example
+   * // Multi-channel EMG grid with custom kernel
+   * const emgGrid = new Float32Array(80000); // 10x8 grid, 1000 samples
+   * pipeline.convolution({ kernel: mySmoothingKernel });
+   * const output = await pipeline.process(emgGrid, {
+   *   sampleRate: 2000,
+   *   channels: 80 // 10 * 8 sensors
+   * });
+   */
+  convolution(params: ConvolutionParams): this {
+    if (!params.kernel || params.kernel.length === 0) {
+      throw new TypeError(
+        "Convolution: kernel is required and cannot be empty"
+      );
+    }
+
+    // Convert to Float32Array if needed
+    const kernel =
+      params.kernel instanceof Float32Array
+        ? params.kernel
+        : new Float32Array(params.kernel);
+
+    const mode = params.mode || "moving";
+    const method = params.method || "auto";
+
+    if (mode !== "moving" && mode !== "batch") {
+      throw new TypeError(
+        `Convolution: mode must be 'moving' or 'batch', got '${mode}'`
+      );
+    }
+
+    if (method !== "auto" && method !== "direct" && method !== "fft") {
+      throw new TypeError(
+        `Convolution: method must be 'auto', 'direct', or 'fft', got '${method}'`
+      );
+    }
+
+    const stageParams: Record<string, unknown> = {
+      kernel,
+      mode,
+      method,
+    };
+
+    // Only include autoThreshold if explicitly set
+    if (params.autoThreshold !== undefined) {
+      stageParams.autoThreshold = params.autoThreshold;
+    }
+
+    this.nativeInstance.addStage("convolution", stageParams);
+    this.stages.push(`convolution:${mode}:${method}:${kernel.length}`);
+    return this;
+  }
+
+  /**
    * Tap into the pipeline for debugging and inspection
    * The callback is executed synchronously after processing, allowing you to inspect
    * intermediate results without modifying the data flow
@@ -665,20 +886,28 @@ class DspProcessor {
     }
 
     // Store the filter instance for processing
-    // Note: We'll need to process through this filter during the process() call
-    // For now, this is a placeholder - we need C++ support for filter stages in pipeline
+    // Get coefficients based on filter type
+    let bCoeffs: Float64Array;
+    let aCoeffs: Float64Array;
 
-    throw new Error(
-      "Filter stages in pipeline not yet implemented in C++ layer. Use standalone filters with manual chaining instead:\n" +
-        "  const filter = IirFilter.createButterworthLowPass({...});\n" +
-        "  const output1 = await pipeline.process(samples);\n" +
-        "  const output2 = filter.process(output1);"
-    );
+    if (filterInstance instanceof FirFilter) {
+      // FIR filter: only B coefficients, A = [1]
+      const coeffs = filterInstance.getCoefficients();
+      bCoeffs = new Float64Array(coeffs);
+      aCoeffs = new Float64Array([1.0]);
+    } else if (filterInstance instanceof IirFilter) {
+      // IIR filter: both B and A coefficients
+      const bCoeffs32 = filterInstance.getBCoefficients();
+      const aCoeffs32 = filterInstance.getACoefficients();
+      bCoeffs = new Float64Array(bCoeffs32);
+      aCoeffs = new Float64Array(aCoeffs32);
+    } else {
+      throw new Error("Unknown filter type");
+    }
 
-    // Future: Once C++ support is added, this would be:
-    // this.nativeInstance.addFilterStage(filterInstance.getNative());
-    // this.stages.push(`filter:${options.type}:${options.mode}`);
-    // return this;
+    this.nativeInstance.addFilterStage(bCoeffs, aCoeffs);
+    this.stages.push(`filter:${options.type}:${options.mode}`);
+    return this;
   }
 
   /**

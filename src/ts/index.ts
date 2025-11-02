@@ -109,6 +109,7 @@ export type {
   DecimateParams,
   InterpolateParams,
   ResampleParams,
+  ConvolutionParams,
 } from "./types.js";
 export type {
   RouteHandler,

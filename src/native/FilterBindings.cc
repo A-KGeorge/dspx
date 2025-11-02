@@ -314,6 +314,7 @@ namespace dsp
                                                                     InstanceMethod("reset", &IirFilterWrapper::Reset),
                                                                     InstanceMethod("getFeedforwardOrder", &IirFilterWrapper::GetFeedforwardOrder),
                                                                     InstanceMethod("getFeedbackOrder", &IirFilterWrapper::GetFeedbackOrder),
+                                                                    InstanceMethod("getOrder", &IirFilterWrapper::GetOrder),
                                                                     InstanceMethod("getBCoefficients", &IirFilterWrapper::GetBCoefficients),
                                                                     InstanceMethod("getACoefficients", &IirFilterWrapper::GetACoefficients),
                                                                     InstanceMethod("setCoefficients", &IirFilterWrapper::SetCoefficients),
@@ -432,6 +433,13 @@ namespace dsp
         Napi::Value GetFeedbackOrder(const Napi::CallbackInfo &info)
         {
             return Napi::Number::New(info.Env(), m_filter->getFeedbackOrder());
+        }
+
+        Napi::Value GetOrder(const Napi::CallbackInfo &info)
+        {
+            // Return the maximum of feedforward and feedback orders
+            size_t order = std::max(m_filter->getFeedforwardOrder(), m_filter->getFeedbackOrder());
+            return Napi::Number::New(info.Env(), order);
         }
 
         Napi::Value GetBCoefficients(const Napi::CallbackInfo &info)

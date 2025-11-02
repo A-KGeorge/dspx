@@ -161,6 +161,34 @@ namespace dsp
             }
         }
 
+        template <typename T>
+        std::pair<std::vector<T>, size_t> FirFilter<T>::getState() const
+        {
+            return {m_state, m_stateIndex};
+        }
+
+        template <typename T>
+        void FirFilter<T>::setState(const std::vector<T> &state, size_t stateIndex)
+        {
+            if (!m_stateful)
+            {
+                throw std::runtime_error("setState() requires stateful mode");
+            }
+
+            // Validate size matches expected filter order
+            if (state.size() != m_coefficients.size())
+            {
+                throw std::invalid_argument("state size must match number of coefficients");
+            }
+            if (stateIndex >= state.size() && !state.empty())
+            {
+                throw std::invalid_argument("stateIndex out of range");
+            }
+
+            m_state = state;
+            m_stateIndex = stateIndex;
+        }
+
         // ========== Filter Design Methods ==========
 
         template <typename T>
@@ -231,9 +259,9 @@ namespace dsp
         template <typename T>
         FirFilter<T> FirFilter<T>::createLowPass(T cutoffFreq, size_t numTaps, const std::string &windowType)
         {
-            if (cutoffFreq <= 0 || cutoffFreq >= T(0.5))
+            if (cutoffFreq <= 0 || cutoffFreq > T(1.0))
             {
-                throw std::invalid_argument("Cutoff frequency must be between 0 and 0.5 (normalized)");
+                throw std::invalid_argument("Cutoff frequency must be between 0 and 1.0 (normalized)");
             }
 
             auto impulse = generateSincLowPass(cutoffFreq, numTaps);
@@ -259,7 +287,7 @@ namespace dsp
         {
             // High-pass = delta - low-pass (spectral inversion)
             auto lowPass = createLowPass(cutoffFreq, numTaps, windowType);
-            auto coeffs = lowPass.getCoefficients();
+            std::vector<T> coeffs = lowPass.getCoefficients(); // Explicit copy
 
             // Spectral inversion
             for (size_t i = 0; i < coeffs.size(); ++i)
@@ -285,8 +313,8 @@ namespace dsp
             auto lpHigh = createLowPass(highCutoff, numTaps, windowType);
             auto lpLow = createLowPass(lowCutoff, numTaps, windowType);
 
-            auto coeffsHigh = lpHigh.getCoefficients();
-            auto coeffsLow = lpLow.getCoefficients();
+            std::vector<T> coeffsHigh = lpHigh.getCoefficients(); // Explicit copy
+            std::vector<T> coeffsLow = lpLow.getCoefficients();   // Explicit copy
 
             std::vector<T> bandPass(coeffsHigh.size());
             for (size_t i = 0; i < coeffsHigh.size(); ++i)
@@ -304,8 +332,8 @@ namespace dsp
             auto lpLow = createLowPass(lowCutoff, numTaps, windowType);
             auto hpHigh = createHighPass(highCutoff, numTaps, windowType);
 
-            auto coeffsLow = lpLow.getCoefficients();
-            auto coeffsHigh = hpHigh.getCoefficients();
+            std::vector<T> coeffsLow = lpLow.getCoefficients();   // Explicit copy
+            std::vector<T> coeffsHigh = hpHigh.getCoefficients(); // Explicit copy
 
             std::vector<T> bandStop(coeffsLow.size());
             for (size_t i = 0; i < coeffsLow.size(); ++i)

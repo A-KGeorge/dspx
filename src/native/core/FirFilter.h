@@ -82,6 +82,19 @@ namespace dsp
              */
             bool isStateful() const { return m_stateful; }
 
+            /**
+             * Get internal state (for serialization)
+             * @return Pair of (state buffer, state index)
+             */
+            std::pair<std::vector<T>, size_t> getState() const;
+
+            /**
+             * Set internal state (for deserialization)
+             * @param state State buffer
+             * @param stateIndex Current position in circular buffer
+             */
+            void setState(const std::vector<T> &state, size_t stateIndex);
+
             // ========== Common FIR Filter Designs ==========
 
             /**

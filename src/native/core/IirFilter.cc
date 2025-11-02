@@ -191,14 +191,42 @@ namespace dsp
             return sum < T(1);
         }
 
+        template <typename T>
+        std::pair<std::vector<T>, std::vector<T>> IirFilter<T>::getState() const
+        {
+            return {m_x_state, m_y_state};
+        }
+
+        template <typename T>
+        void IirFilter<T>::setState(const std::vector<T> &x_state, const std::vector<T> &y_state)
+        {
+            if (!m_stateful)
+            {
+                throw std::runtime_error("setState() requires stateful mode");
+            }
+
+            // Validate sizes match expected filter order
+            if (x_state.size() != m_b_coeffs.size())
+            {
+                throw std::invalid_argument("x_state size must match number of b coefficients");
+            }
+            if (y_state.size() != m_a_coeffs.size())
+            {
+                throw std::invalid_argument("y_state size must match number of a coefficients");
+            }
+
+            m_x_state = x_state;
+            m_y_state = y_state;
+        }
+
         // ========== Filter Design Methods ==========
 
         template <typename T>
         IirFilter<T> IirFilter<T>::createFirstOrderLowPass(T cutoffFreq)
         {
-            if (cutoffFreq <= 0 || cutoffFreq >= T(0.5))
+            if (cutoffFreq <= 0 || cutoffFreq > T(1.0))
             {
-                throw std::invalid_argument("Cutoff frequency must be between 0 and 0.5");
+                throw std::invalid_argument("Cutoff frequency must be between 0 and 1.0");
             }
 
             // First-order low-pass: H(z) = (b0 + b1*z^-1) / (1 + a1*z^-1)
@@ -216,9 +244,9 @@ namespace dsp
         template <typename T>
         IirFilter<T> IirFilter<T>::createFirstOrderHighPass(T cutoffFreq)
         {
-            if (cutoffFreq <= 0 || cutoffFreq >= T(0.5))
+            if (cutoffFreq <= 0 || cutoffFreq > T(1.0))
             {
-                throw std::invalid_argument("Cutoff frequency must be between 0 and 0.5");
+                throw std::invalid_argument("Cutoff frequency must be between 0 and 1.0");
             }
 
             // First-order high-pass
@@ -241,9 +269,9 @@ namespace dsp
         template <typename T>
         IirFilter<T> IirFilter<T>::createButterworthLowPass(T cutoffFreq, int order)
         {
-            if (cutoffFreq <= 0 || cutoffFreq >= T(0.5))
+            if (cutoffFreq <= 0 || cutoffFreq > T(1.0))
             {
-                throw std::invalid_argument("Cutoff frequency must be between 0 and 0.5");
+                throw std::invalid_argument("Cutoff frequency must be between 0 and 1.0");
             }
 
             if (order < 1 || order > 8)
@@ -278,9 +306,9 @@ namespace dsp
         template <typename T>
         IirFilter<T> IirFilter<T>::createButterworthHighPass(T cutoffFreq, int order)
         {
-            if (cutoffFreq <= 0 || cutoffFreq >= T(0.5))
+            if (cutoffFreq <= 0 || cutoffFreq > T(1.0))
             {
-                throw std::invalid_argument("Cutoff frequency must be between 0 and 0.5");
+                throw std::invalid_argument("Cutoff frequency must be between 0 and 1.0");
             }
 
             if (order < 1 || order > 8)
@@ -319,28 +347,21 @@ namespace dsp
                 throw std::invalid_argument("Low cutoff must be less than high cutoff");
             }
 
-            // Simplified: cascade low-pass and high-pass
-            // (For true band-pass, would need proper transformation)
+            // Cascade high-pass and low-pass filters
+            // This creates a band-pass by allowing frequencies between lowCutoff and highCutoff
             auto hp = createButterworthHighPass(lowCutoff, order);
             auto lp = createButterworthLowPass(highCutoff, order);
 
-            // Convolve coefficients (simplified - in practice need proper cascade)
-            auto b_hp = hp.getBCoefficients();
-            auto a_hp = hp.getACoefficients();
-            auto b_lp = lp.getBCoefficients();
-            auto a_lp = lp.getACoefficients();
-
-            // For now, return the high-pass filter as placeholder
-            // Full implementation would cascade the filters properly
-            return hp;
+            // Cascade the two filters using polynomial multiplication
+            return cascadeFilters(hp, lp);
         }
 
         template <typename T>
         IirFilter<T> IirFilter<T>::createChebyshevLowPass(T cutoffFreq, int order, T rippleDb)
         {
-            if (cutoffFreq <= 0 || cutoffFreq >= T(0.5))
+            if (cutoffFreq <= 0 || cutoffFreq > T(1.0))
             {
-                throw std::invalid_argument("Cutoff frequency must be between 0 and 0.5");
+                throw std::invalid_argument("Cutoff frequency must be between 0 and 1.0");
             }
 
             if (order < 1 || order > 8)
@@ -390,9 +411,9 @@ namespace dsp
         template <typename T>
         IirFilter<T> IirFilter<T>::createChebyshevHighPass(T cutoffFreq, int order, T rippleDb)
         {
-            if (cutoffFreq <= 0 || cutoffFreq >= T(0.5))
+            if (cutoffFreq <= 0 || cutoffFreq > T(1.0))
             {
-                throw std::invalid_argument("Cutoff frequency must be between 0 and 0.5");
+                throw std::invalid_argument("Cutoff frequency must be between 0 and 1.0");
             }
 
             if (order < 1 || order > 8)
@@ -452,8 +473,8 @@ namespace dsp
             auto hp = createChebyshevHighPass(lowCutoff, order, rippleDb);
             auto lp = createChebyshevLowPass(highCutoff, order, rippleDb);
 
-            // Return high-pass as placeholder (proper implementation would cascade)
-            return hp;
+            // Cascade the two filters using polynomial multiplication
+            return cascadeFilters(hp, lp);
         }
 
         template <typename T>
@@ -495,9 +516,9 @@ namespace dsp
         template <typename T>
         IirFilter<T> IirFilter<T>::createLowShelf(T cutoffFreq, T gainDb, T Q)
         {
-            if (cutoffFreq <= 0 || cutoffFreq >= T(0.5))
+            if (cutoffFreq <= 0 || cutoffFreq > T(1.0))
             {
-                throw std::invalid_argument("Cutoff frequency must be between 0 and 0.5");
+                throw std::invalid_argument("Cutoff frequency must be between 0 and 1.0");
             }
 
             if (Q <= 0)
@@ -533,9 +554,9 @@ namespace dsp
         template <typename T>
         IirFilter<T> IirFilter<T>::createHighShelf(T cutoffFreq, T gainDb, T Q)
         {
-            if (cutoffFreq <= 0 || cutoffFreq >= T(0.5))
+            if (cutoffFreq <= 0 || cutoffFreq > T(1.0))
             {
-                throw std::invalid_argument("Cutoff frequency must be between 0 and 0.5");
+                throw std::invalid_argument("Cutoff frequency must be between 0 and 1.0");
             }
 
             if (Q <= 0)
@@ -566,6 +587,69 @@ namespace dsp
             a2 /= a0;
 
             return IirFilter<T>({b0, b1, b2}, {a1, a2}, true);
+        }
+
+        template <typename T>
+        IirFilter<T> IirFilter<T>::cascadeFilters(const IirFilter<T> &filter1, const IirFilter<T> &filter2)
+        {
+            // Get coefficients from both filters
+            const auto &b1 = filter1.getBCoefficients();
+            const auto &a1 = filter1.getACoefficients();
+            const auto &b2 = filter2.getBCoefficients();
+            const auto &a2 = filter2.getACoefficients();
+
+            // Cascade: H(z) = H1(z) * H2(z)
+            // Numerator: B(z) = B1(z) * B2(z) (polynomial multiplication)
+            // Denominator: A(z) = A1(z) * A2(z) (polynomial multiplication)
+
+            // Convolve numerators (b coefficients)
+            size_t b_len = b1.size() + b2.size() - 1;
+            std::vector<T> b_result(b_len, T(0));
+
+            for (size_t i = 0; i < b1.size(); ++i)
+            {
+                for (size_t j = 0; j < b2.size(); ++j)
+                {
+                    b_result[i + j] += b1[i] * b2[j];
+                }
+            }
+
+            // Convolve denominators (a coefficients)
+            // Note: a coefficients don't include a[0]=1, so we need to prepend it
+            std::vector<T> a1_full(a1.size() + 1);
+            std::vector<T> a2_full(a2.size() + 1);
+            a1_full[0] = T(1);
+            a2_full[0] = T(1);
+            std::copy(a1.begin(), a1.end(), a1_full.begin() + 1);
+            std::copy(a2.begin(), a2.end(), a2_full.begin() + 1);
+
+            size_t a_len = a1_full.size() + a2_full.size() - 1;
+            std::vector<T> a_result_full(a_len, T(0));
+
+            for (size_t i = 0; i < a1_full.size(); ++i)
+            {
+                for (size_t j = 0; j < a2_full.size(); ++j)
+                {
+                    a_result_full[i + j] += a1_full[i] * a2_full[j];
+                }
+            }
+
+            // Normalize by a[0] and extract a[1], a[2], ...
+            T a0 = a_result_full[0];
+            std::vector<T> b_normalized(b_result.size());
+            std::vector<T> a_normalized(a_result_full.size() - 1);
+
+            for (size_t i = 0; i < b_result.size(); ++i)
+            {
+                b_normalized[i] = b_result[i] / a0;
+            }
+
+            for (size_t i = 1; i < a_result_full.size(); ++i)
+            {
+                a_normalized[i - 1] = a_result_full[i] / a0;
+            }
+
+            return IirFilter<T>(b_normalized, a_normalized, true);
         }
 
         // Explicit template instantiations

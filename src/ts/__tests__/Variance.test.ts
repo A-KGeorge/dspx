@@ -301,20 +301,21 @@ describe("Variance Filter", () => {
       assert.strictEqual(state.stages[0].state.windowSize, 5);
       assert.strictEqual(state.stages[0].state.channels.length, 1);
 
-      // Create new pipeline and restore state
-      const pipeline2 = createDspPipeline().Variance({
-        mode: "moving",
-        windowSize: 5,
-      });
+      // Create new pipeline with same structure and restore state
+      const pipeline2 = createDspPipeline();
+      pipeline2.Variance({ mode: "moving", windowSize: 5 });
       await pipeline2.loadState(stateJson);
 
       // Continue processing from saved state
-      const input2 = new Float32Array([11, 12, 13]);
-      const output1 = await pipeline.process(input2, {
+      // NOTE: Create separate arrays since process() modifies in-place
+      const input2a = new Float32Array([11, 12, 13]);
+      const input2b = new Float32Array([11, 12, 13]);
+
+      const output1 = await pipeline.process(input2a, {
         sampleRate: 1000,
         channels: 1,
       });
-      const output2 = await pipeline2.process(input2, {
+      const output2 = await pipeline2.process(input2b, {
         sampleRate: 1000,
         channels: 1,
       });

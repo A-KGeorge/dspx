@@ -2,7 +2,7 @@
   "mode": "pre",
   "tag": "alpha",
   "initialVersions": {
-    "dspx": "0.2.0-alpha.0"
+    "dspx": "0.3.0-alpha.0"
   },
   "changesets": [
     "calm-planets-care",

@@ -4,7 +4,11 @@
  * Demonstrates all 8 transforms and common use cases
  */
 
-import { FftProcessor, MovingFftProcessor, FftUtils } from "dspx";
+import {
+  FftProcessor,
+  MovingFftProcessor,
+  FftUtils,
+} from "../../../dist/fft.js";
 
 // ========== Example 1: Basic Spectral Analysis ==========
 

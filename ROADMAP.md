@@ -24,7 +24,9 @@ All three will use efficient polyphase FIR filtering implemented in C++ for maxi
 - [x] **FFT Implementation:** Forward/inverse FFT, RFFT, windowing, magnitude/phase extraction
 - [x] **Filter Design:** FIR (low/high/band-pass/band-stop), IIR (Butterworth, Chebyshev), Biquad EQ (peaking, low-shelf, high-shelf)
 - [x] **Advanced Signal Analysis:** Hjorth parameters, spectral features (centroid, rolloff, flux), entropy measures (Shannon, SampEn, ApEn)
+- [x] **Pipeline Integration:** FIR/IIR filters can be added to DSP pipelines with proper coefficient handling
 - [x] **Utility:** `listState`, `clearState`, `getState`, `saveState`
+- [x] **Bug Fixes:** Cutoff frequency validation, coefficient copying, state management, pipeline filter chaining
 
 ---
 
@@ -36,7 +38,7 @@ All three will use efficient polyphase FIR filtering implemented in C++ for maxi
 | 🧠 **Statistical / Entropy Features** | ✅ `hjorthParameters`, ✅ `entropy`, ✅ `sampleEntropy`, ✅ `approximateEntropy`, ☐ `kurtosis`, ☐ `skewness`                                                                                          | Shape and complexity features                       | Aggregates per window            | 🟡 Medium                     |
 | 🔉 **Spectral / Transform Domain**    | ✅ `fft`, ✅ `rfft`, ✅ `ifft`, ✅ `irfft`, ✅ `spectralCentroid`, ✅ `spectralRolloff`, ✅ `spectralFlux`, ☐ `hilbertTransform`, ☐ `waveletTransform`, ☐ `stft`, ☐ `melSpectrogram`, ☐ `mfcc`        | Frequency and time-frequency analysis               | Optional (RedisJSON possible)    | 🔴 Hard                       |
 | 🎛 **Filtering (Classic + Modern)**    | ✅ `firFilter`, ✅ `iirFilter`, ✅ `butterworthLowpass/Highpass/Bandpass`, ✅ `chebyshevLowpass/Highpass/Bandpass`, ✅ `peakingEQ`, ✅ `lowShelf`, ✅ `highShelf`, ☐ `kalmanFilter`, ☐ `wienerFilter` | Filtering for sensor / audio data                   | Coefficients / state storage     | 🔴 Hard                       |
-| ⏱ **Resampling / Rate Control**       | 🚀 `polyphaseDecimate`, 🚀 `interpolate`, 🚀 `resample`                                                                                                                                               | Resampling and alias mitigation                     | Redis phase/delay tracking       | 🟡 Medium                     |
+| ⏱ **Resampling / Rate Control**       | ✅ `polyphaseDecimate`, ✅ `interpolate`, ✅ `resample`                                                                                                                                               | Resampling and alias mitigation                     | Redis phase/delay tracking       | 🟡 Medium                     |
 | 🔊 **Fundamental Frequency**          | ☐ `yin`, ☐ `cepstrumPitch`                                                                                                                                                                            | Pitch / F₀ estimation for audio or tremor detection | Difference function buffers      | 🔴 Hard                       |
 | 🪞 **Feature Extraction (Spectral)**  | ✅ `spectralCentroid`, ✅ `spectralRolloff`, ✅ `spectralFlux`, ☐ `spectralFlatness`, ☐ `mfcc`                                                                                                        | Audio / signal features for ML                      | Aggregates + filterbank storage  | 🟡 Medium                     |
 | 🧬 **Adaptive Filters**               | ☐ `lmsFilter`, ☐ `nlmsFilter`, ☐ `rls`, ☐ `wienerFilter`, ☐ `pca`, ☐ `ica`, ☐ `whiten`                                                                                                                | Adaptive denoising + decorrelation                  | Redis holds coefficients         | 🔴 Hard                       |
@@ -63,12 +65,12 @@ All three will use efficient polyphase FIR filtering implemented in C++ for maxi
 
 ### 🟨 **Stage 2 — Intermediate (Math + Buffer Dependent)**
 
-| Priority | Category                                              | Status          | Notes                                |
-| -------- | ----------------------------------------------------- | --------------- | ------------------------------------ |
-| 4️⃣       | `zScoreNormalize`, `mav`, `hjorthParameters`          | [X]             | Window math & standard deviation ops |
-| 5️⃣       | `polyphaseDecimate`, `interpolate`, `resample`        | [🚀 Coming Now] | **Expected in next few days**        |
-| 6️⃣       | `spectralCentroid`, `spectralRolloff`, `spectralFlux` | [X]             | Derived FFT metrics                  |
-| 7️⃣       | `entropy`, `sampleEntropy`, `approximateEntropy`      | [X]             | Complexity metrics per window        |
+| Priority | Category                                              | Status | Notes                                |
+| -------- | ----------------------------------------------------- | ------ | ------------------------------------ |
+| 4️⃣       | `zScoreNormalize`, `mav`, `hjorthParameters`          | [X]    | Window math & standard deviation ops |
+| 5️⃣       | `polyphaseDecimate`, `interpolate`, `resample`        | [X]    | Leverages Circular Buffers           |
+| 6️⃣       | `spectralCentroid`, `spectralRolloff`, `spectralFlux` | [X]    | Derived FFT metrics                  |
+| 7️⃣       | `entropy`, `sampleEntropy`, `approximateEntropy`      | [X]    | Complexity metrics per window        |
 
 **🚀 Resampling Implementation Plan:**
 

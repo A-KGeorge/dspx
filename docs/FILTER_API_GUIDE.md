@@ -156,9 +156,11 @@ class IirFilter {
   process(input: Float32Array): Promise<Float32Array>;
   processSample(sample: number): Promise<number>;
   reset(): void;
-  getOrder(): number;
-  getBCoefficients(): Float32Array;
-  getACoefficients(): Float32Array;
+  getOrder(): number;                        // Returns max(feedforward, feedback) order
+  getBCoefficients(): Float32Array;          // Feedforward coefficients
+  getACoefficients(): Float32Array;          // Feedback coefficients
+  getFeedforwardOrder(): number;             // B coefficient order
+  getFeedbackOrder(): number;                // A coefficient order
   isStable(): boolean;
 }
 ```
@@ -291,16 +293,22 @@ filter.reset();
 
 The API automatically validates:
 
-✅ Cutoff frequency < Nyquist frequency (sampleRate / 2)  
+✅ Cutoff frequency ≤ Nyquist frequency (sampleRate / 2)  
+✅ Normalized cutoff frequency must be in range (0, 1.0]  
 ✅ Order is in valid range (FIR: > 0, IIR: 1-8)  
 ✅ Band-pass/stop: low cutoff < high cutoff  
 ✅ All parameters are positive numbers
+
+**Important Note:** Cutoff frequencies are normalized internally as `cutoffFreq / (sampleRate / 2)`, resulting in a range of (0, 1.0] where 1.0 represents the Nyquist frequency. Both FIR and IIR filters accept cutoff values up to and including the Nyquist frequency.
 
 Error messages:
 
 ```typescript
 // Cutoff > Nyquist
 Error: "Cutoff frequency must be between 0 and 4000 Hz (Nyquist frequency)";
+
+// Invalid normalized cutoff
+Error: "Cutoff frequency must be between 0 and 1.0 (normalized)";
 
 // Invalid order
 Error: "Order must be between 1 and 8 for IIR Butterworth filters";

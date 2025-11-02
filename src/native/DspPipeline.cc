@@ -8,6 +8,11 @@
 #include "adapters/WaveformLengthStage.h"    // Waveform Length method
 #include "adapters/SscStage.h"               // Slope Sign Change method
 #include "adapters/WampStage.h"              // Willison Amplitude method
+#include "adapters/FilterStage.h"            // Filter stage (FIR/IIR)
+#include "adapters/InterpolatorStage.h"      // Interpolator (upsample)
+#include "adapters/DecimatorStage.h"         // Decimator (downsample)
+#include "adapters/ResamplerStage.h"         // Resampler (rational rate conversion)
+#include "adapters/ConvolutionStage.h"       // Convolution stage
 
 namespace dsp
 {
@@ -28,6 +33,7 @@ namespace dsp
         Napi::Function func = DefineClass(env, "DspPipeline", {
                                                                   // Pipeline building
                                                                   InstanceMethod("addStage", &DspPipeline::AddStage),
+                                                                  InstanceMethod("addFilterStage", &DspPipeline::AddFilterStage),
 
                                                                   // Processing
                                                                   InstanceMethod("process", &DspPipeline::ProcessAsync),
@@ -261,6 +267,165 @@ namespace dsp
 
             return std::make_unique<dsp::adapters::WampStage>(windowSize, threshold);
         };
+
+        // Factory for Interpolator stage (upsample by L)
+        m_stageFactories["interpolate"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("factor"))
+            {
+                throw std::invalid_argument("Interpolate: 'factor' is required");
+            }
+            if (!params.Has("sampleRate"))
+            {
+                throw std::invalid_argument("Interpolate: 'sampleRate' is required");
+            }
+
+            int factor = params.Get("factor").As<Napi::Number>().Int32Value();
+            double sampleRate = params.Get("sampleRate").As<Napi::Number>().DoubleValue();
+
+            // Optional filter order (default to 51)
+            int order = 51;
+            if (params.Has("order"))
+            {
+                order = params.Get("order").As<Napi::Number>().Int32Value();
+            }
+
+            return std::make_unique<dsp::InterpolatorStage>(factor, order, sampleRate);
+        };
+
+        // Factory for Decimator stage (downsample by M)
+        m_stageFactories["decimate"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("factor"))
+            {
+                throw std::invalid_argument("Decimate: 'factor' is required");
+            }
+            if (!params.Has("sampleRate"))
+            {
+                throw std::invalid_argument("Decimate: 'sampleRate' is required");
+            }
+
+            int factor = params.Get("factor").As<Napi::Number>().Int32Value();
+            double sampleRate = params.Get("sampleRate").As<Napi::Number>().DoubleValue();
+
+            // Optional filter order (default to 51)
+            int order = 51;
+            if (params.Has("order"))
+            {
+                order = params.Get("order").As<Napi::Number>().Int32Value();
+            }
+
+            return std::make_unique<dsp::DecimatorStage>(factor, order, sampleRate);
+        };
+
+        // Factory for Resampler stage (rational resampling L/M)
+        m_stageFactories["resample"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("upFactor"))
+            {
+                throw std::invalid_argument("Resample: 'upFactor' is required");
+            }
+            if (!params.Has("downFactor"))
+            {
+                throw std::invalid_argument("Resample: 'downFactor' is required");
+            }
+            if (!params.Has("sampleRate"))
+            {
+                throw std::invalid_argument("Resample: 'sampleRate' is required");
+            }
+
+            int upFactor = params.Get("upFactor").As<Napi::Number>().Int32Value();
+            int downFactor = params.Get("downFactor").As<Napi::Number>().Int32Value();
+            double sampleRate = params.Get("sampleRate").As<Napi::Number>().DoubleValue();
+
+            // Optional filter order (default to 51)
+            int order = 51;
+            if (params.Has("order"))
+            {
+                order = params.Get("order").As<Napi::Number>().Int32Value();
+            }
+
+            return std::make_unique<dsp::ResamplerStage>(upFactor, downFactor, order, sampleRate);
+        };
+
+        // Factory for Convolution stage
+        m_stageFactories["convolution"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("kernel"))
+            {
+                throw std::invalid_argument("Convolution: 'kernel' is required");
+            }
+
+            // Extract kernel
+            Napi::Value kernelValue = params.Get("kernel");
+            std::vector<float> kernel;
+
+            if (kernelValue.IsTypedArray())
+            {
+                Napi::TypedArray typedArray = kernelValue.As<Napi::TypedArray>();
+                if (typedArray.TypedArrayType() == napi_float32_array)
+                {
+                    Napi::Float32Array kernelArray = kernelValue.As<Napi::Float32Array>();
+                    kernel.resize(kernelArray.ElementLength());
+                    for (size_t i = 0; i < kernelArray.ElementLength(); ++i)
+                    {
+                        kernel[i] = kernelArray[i];
+                    }
+                }
+                else
+                {
+                    throw std::invalid_argument("Convolution: kernel must be Float32Array");
+                }
+            }
+            else if (kernelValue.IsArray())
+            {
+                Napi::Array kernelArray = kernelValue.As<Napi::Array>();
+                kernel.resize(kernelArray.Length());
+                for (uint32_t i = 0; i < kernelArray.Length(); ++i)
+                {
+                    kernel[i] = kernelArray.Get(i).As<Napi::Number>().FloatValue();
+                }
+            }
+            else
+            {
+                throw std::invalid_argument("Convolution: kernel must be an array or Float32Array");
+            }
+
+            // Mode: 'moving' or 'batch' (default: 'moving')
+            dsp::adapters::ConvolutionMode mode = dsp::adapters::ConvolutionMode::Moving;
+            if (params.Has("mode"))
+            {
+                std::string modeStr = params.Get("mode").As<Napi::String>().Utf8Value();
+                if (modeStr == "batch")
+                {
+                    mode = dsp::adapters::ConvolutionMode::Batch;
+                }
+            }
+
+            // Method: 'auto', 'direct', or 'fft' (default: 'auto')
+            dsp::adapters::ConvolutionMethod method = dsp::adapters::ConvolutionMethod::Auto;
+            if (params.Has("method"))
+            {
+                std::string methodStr = params.Get("method").As<Napi::String>().Utf8Value();
+                if (methodStr == "direct")
+                {
+                    method = dsp::adapters::ConvolutionMethod::Direct;
+                }
+                else if (methodStr == "fft")
+                {
+                    method = dsp::adapters::ConvolutionMethod::FFT;
+                }
+            }
+
+            // Auto threshold (default: 64)
+            size_t autoThreshold = 64;
+            if (params.Has("autoThreshold"))
+            {
+                autoThreshold = params.Get("autoThreshold").As<Napi::Number>().Uint32Value();
+            }
+
+            return std::make_unique<dsp::adapters::ConvolutionStage>(kernel, mode, method, autoThreshold);
+        };
     }
 
     /**
@@ -307,6 +472,47 @@ namespace dsp
     }
 
     /**
+     * Add a generic filter stage to the pipeline.
+     * TS calls: native.addFilterStage(bCoeffs, aCoeffs)
+     */
+    Napi::Value DspPipeline::AddFilterStage(const Napi::CallbackInfo &info)
+    {
+        Napi::Env env = info.Env();
+
+        if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray())
+        {
+            Napi::TypeError::New(env, "Expected two Float64Arrays (b and a coefficients) as arguments").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        try
+        {
+            // 1. Get coefficients from TypeScript (zero-copy)
+            Napi::Float64Array bCoeffsArray = info[0].As<Napi::Float64Array>();
+            Napi::Float64Array aCoeffsArray = info[1].As<Napi::Float64Array>();
+
+            // 2. Convert to std::vector<double>
+            std::vector<double> bCoeffs(bCoeffsArray.Data(), bCoeffsArray.Data() + bCoeffsArray.ElementLength());
+            std::vector<double> aCoeffs(aCoeffsArray.Data(), aCoeffsArray.Data() + aCoeffsArray.ElementLength());
+
+            // 3. Create and add the stage
+            m_stages.push_back(std::make_unique<dsp::adapters::FilterStage>(bCoeffs, aCoeffs));
+        }
+        catch (const std::invalid_argument &e)
+        {
+            Napi::TypeError::New(env, e.what()).ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+        catch (const std::exception &e)
+        {
+            Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        return env.Undefined();
+    }
+
+    /**
      * AsyncWorker for processing DSP pipeline in background thread
      */
     class ProcessWorker : public Napi::AsyncWorker
@@ -340,11 +546,107 @@ namespace dsp
             try
             {
                 // Process the buffer through all stages
-                // Pass timestamps to stages that support time-based processing
+                // Handle both in-place and resizing stages
+                float *currentBuffer = m_data;
+                size_t currentSize = m_numSamples;
+                float *tempBuffer = nullptr;
+                bool usingTempBuffer = false;
+
                 for (const auto &stage : m_stages)
                 {
-                    stage->process(m_data, m_numSamples, m_channels, m_timestamps);
+                    if (stage->isResizing())
+                    {
+                        // Resizing stage: allocate new buffer
+                        size_t outputSize = stage->calculateOutputSize(currentSize);
+                        float *outputBuffer = new float[outputSize];
+
+                        size_t actualOutputSize = 0;
+                        stage->processResizing(currentBuffer, currentSize,
+                                               outputBuffer, actualOutputSize,
+                                               m_channels, m_timestamps);
+
+                        // Free the previous temporary buffer if we allocated one
+                        if (usingTempBuffer)
+                        {
+                            delete[] currentBuffer;
+                        }
+
+                        currentBuffer = outputBuffer;
+                        currentSize = actualOutputSize;
+                        usingTempBuffer = true;
+
+                        // Adjust timestamps for resampled data
+                        if (m_timestamps != nullptr)
+                        {
+                            double timeScale = stage->getTimeScaleFactor();
+                            size_t numOutputSamples = actualOutputSize / m_channels;
+
+                            // Allocate new timestamp buffer
+                            float *newTimestamps = new float[actualOutputSize];
+
+                            // Interpolate timestamps based on time scale
+                            // For upsampling (timeScale < 1): more samples, smaller time steps
+                            // For downsampling (timeScale > 1): fewer samples, larger time steps
+                            for (size_t i = 0; i < numOutputSamples; ++i)
+                            {
+                                // Map output sample index to input time domain
+                                double inputTime = i * timeScale;
+                                size_t inputIdx = static_cast<size_t>(inputTime);
+                                double frac = inputTime - inputIdx;
+
+                                float timestamp;
+                                if (inputIdx >= (m_numSamples / m_channels))
+                                {
+                                    // Beyond input range, extrapolate
+                                    timestamp = m_timestamps[(m_numSamples / m_channels - 1) * m_channels] +
+                                                static_cast<float>((inputTime - (m_numSamples / m_channels - 1)) * timeScale);
+                                }
+                                else if (inputIdx + 1 >= (m_numSamples / m_channels))
+                                {
+                                    // At boundary, use last timestamp
+                                    timestamp = m_timestamps[inputIdx * m_channels];
+                                }
+                                else
+                                {
+                                    // Interpolate between two timestamps
+                                    float t0 = m_timestamps[inputIdx * m_channels];
+                                    float t1 = m_timestamps[(inputIdx + 1) * m_channels];
+                                    timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
+                                }
+
+                                // Replicate timestamp for all channels
+                                for (int ch = 0; ch < m_channels; ++ch)
+                                {
+                                    newTimestamps[i * m_channels + ch] = timestamp;
+                                }
+                            }
+
+                            // Replace old timestamps
+                            // Note: We don't own the original m_timestamps, so don't delete it
+                            m_timestamps = newTimestamps;
+                            m_timestampBuffer.reset(newTimestamps);
+                        }
+                    }
+                    else
+                    {
+                        // In-place stage: process directly
+                        // If we're using a temp buffer, process it; otherwise process original
+                        if (usingTempBuffer)
+                        {
+                            stage->process(currentBuffer, currentSize, m_channels, m_timestamps);
+                        }
+                        else
+                        {
+                            // First in-place stage on original buffer
+                            stage->process(currentBuffer, currentSize, m_channels, m_timestamps);
+                        }
+                    }
                 }
+
+                // Store final result
+                m_finalBuffer = currentBuffer;
+                m_finalSize = currentSize;
+                m_ownsBuffer = usingTempBuffer;
             }
             catch (const std::exception &e)
             {
@@ -356,9 +658,22 @@ namespace dsp
         void OnOK() override
         {
             Napi::Env env = Env();
+
+            // Create a new Float32Array with the final buffer size
+            Napi::Float32Array outputArray = Napi::Float32Array::New(env, m_finalSize);
+            float *outputData = outputArray.Data();
+
+            // Copy final data to the output array
+            std::memcpy(outputData, m_finalBuffer, m_finalSize * sizeof(float));
+
+            // Clean up temporary buffer if we allocated one
+            if (m_ownsBuffer)
+            {
+                delete[] m_finalBuffer;
+            }
+
             // Resolve the promise with the processed buffer
-            Napi::Float32Array buffer = m_bufferRef.Value();
-            m_deferred.Resolve(buffer);
+            m_deferred.Resolve(outputArray);
         }
 
         void OnError(const Napi::Error &error) override
@@ -375,6 +690,14 @@ namespace dsp
         int m_channels;
         Napi::Reference<Napi::Float32Array> m_bufferRef;
         Napi::Reference<Napi::Float32Array> m_timestampRef;
+
+        // For handling resized buffers
+        float *m_finalBuffer = nullptr;
+        size_t m_finalSize = 0;
+        bool m_ownsBuffer = false;
+
+        // For managing allocated timestamp buffer
+        std::unique_ptr<float[]> m_timestampBuffer;
     };
 
     /**

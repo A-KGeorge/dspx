@@ -44,7 +44,10 @@ describe("Chebyshev Filters", () => {
       rippleDb: 0.5,
     });
 
-    assert.strictEqual(filter.getBCoefficients().length, 3);
+    // Band-pass cascades high-pass and low-pass filters
+    // Order 2 means 2nd-order (biquad) for each, so cascaded = 4th-order
+    // 4th-order filter has 5 coefficients (b0, b1, b2, b3, b4)
+    assert.strictEqual(filter.getBCoefficients().length, 5);
 
     const testSignal = new Float32Array(10).fill(1.0);
     await filter.process(testSignal);

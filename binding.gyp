@@ -22,7 +22,8 @@
         "src/native/utils/CircularBufferVector.cc",
         "src/native/utils/NapiUtils.cc",
         "src/native/utils/SlidingWindowFilter.cc",
-        "src/native/utils/TimeSeriesBuffer.cc"
+        "src/native/utils/TimeSeriesBuffer.cc",
+        "src/native/adapters/FilterStage.cc"
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",

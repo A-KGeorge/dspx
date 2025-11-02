@@ -316,6 +316,274 @@ class ConcurrencyLimiter {
 const concurrencyLimiter = new ConcurrencyLimiter(5);
 
 /**
+ * Circuit breaker states
+ */
+export enum CircuitState {
+  CLOSED = "closed", // Normal operation
+  OPEN = "open", // Failing, stop sending requests
+  HALF_OPEN = "half_open", // Testing recovery
+}
+
+/**
+ * Circuit breaker configuration
+ */
+export interface CircuitBreakerConfig {
+  /** Open circuit after N consecutive failures */
+  failureThreshold: number;
+  /** Close circuit after N consecutive successes in HALF_OPEN */
+  successThreshold: number;
+  /** Time to wait before trying HALF_OPEN (milliseconds) */
+  timeout: number;
+  /** Minimum requests before evaluating error rate */
+  volumeThreshold: number;
+  /** Open circuit if error rate exceeds this percentage (0-100) */
+  errorPercentageThreshold: number;
+}
+
+/**
+ * Circuit breaker statistics
+ */
+export interface CircuitBreakerStats {
+  name: string;
+  state: CircuitState;
+  failureCount: number;
+  successCount: number;
+  requestCount: number;
+  errorPercentage: number;
+  lastFailureTime: number;
+  nextAttemptTime: number;
+}
+
+/**
+ * Circuit breaker for backend handlers
+ * Prevents cascading failures and resource exhaustion by failing fast
+ * when a downstream service is unavailable.
+ *
+ * States:
+ * - CLOSED: Normal operation, requests go through
+ * - OPEN: Service failing, reject requests immediately
+ * - HALF_OPEN: Testing recovery with limited requests
+ *
+ * @example
+ * ```ts
+ * const breaker = new CircuitBreaker('loki', {
+ *   failureThreshold: 5,
+ *   successThreshold: 2,
+ *   timeout: 30000,
+ *   volumeThreshold: 10,
+ *   errorPercentageThreshold: 50
+ * });
+ *
+ * await breaker.execute(async () => {
+ *   await sendToLoki(logs);
+ * });
+ * ```
+ */
+export class CircuitBreaker {
+  private state: CircuitState = CircuitState.CLOSED;
+  private failureCount = 0;
+  private successCount = 0;
+  private requestCount = 0;
+  private lastFailureTime = 0;
+  private nextAttemptTime = 0;
+
+  constructor(private name: string, private config: CircuitBreakerConfig) {}
+
+  /**
+   * Execute a function with circuit breaker protection
+   * @throws Error if circuit is OPEN or function fails
+   */
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    // Check if circuit is OPEN
+    if (this.state === CircuitState.OPEN) {
+      // Check if we should transition to HALF_OPEN
+      if (Date.now() >= this.nextAttemptTime) {
+        console.log(
+          `[CircuitBreaker:${this.name}] Transitioning OPEN → HALF_OPEN`
+        );
+        this.state = CircuitState.HALF_OPEN;
+        this.successCount = 0;
+      } else {
+        // Circuit is OPEN, fail fast!
+        const waitSeconds = Math.ceil(
+          (this.nextAttemptTime - Date.now()) / 1000
+        );
+        throw new Error(
+          `[CircuitBreaker:${this.name}] Circuit OPEN - failing fast. Retry in ${waitSeconds}s`
+        );
+      }
+    }
+
+    try {
+      // Execute the function
+      const result = await fn();
+
+      // Success!
+      this.onSuccess();
+      return result;
+    } catch (error) {
+      // Failure!
+      this.onFailure();
+      throw error;
+    }
+  }
+
+  /**
+   * Handle successful request
+   */
+  private onSuccess(): void {
+    this.requestCount++;
+    this.failureCount = 0; // Reset failure count on success
+
+    if (this.state === CircuitState.HALF_OPEN) {
+      this.successCount++;
+
+      // Enough successes in HALF_OPEN? Close the circuit!
+      if (this.successCount >= this.config.successThreshold) {
+        console.log(
+          `[CircuitBreaker:${this.name}] HALF_OPEN → CLOSED (${this.successCount} consecutive successes)`
+        );
+        this.state = CircuitState.CLOSED;
+        this.successCount = 0;
+        this.requestCount = 0;
+      }
+    }
+  }
+
+  /**
+   * Handle failed request
+   */
+  private onFailure(): void {
+    this.requestCount++;
+    this.failureCount++;
+    this.lastFailureTime = Date.now();
+
+    if (this.state === CircuitState.HALF_OPEN) {
+      // Failed in HALF_OPEN? Go back to OPEN immediately
+      console.warn(
+        `[CircuitBreaker:${this.name}] HALF_OPEN → OPEN (recovery test failed)`
+      );
+      this.state = CircuitState.OPEN;
+      this.nextAttemptTime = Date.now() + this.config.timeout;
+      this.successCount = 0;
+      return;
+    }
+
+    // Check if we should open the circuit
+    if (this.shouldOpen()) {
+      const errorPct = this.getErrorPercentage();
+      console.warn(
+        `[CircuitBreaker:${this.name}] CLOSED → OPEN (${
+          this.failureCount
+        } failures, ${errorPct.toFixed(1)}% error rate)`
+      );
+      this.state = CircuitState.OPEN;
+      this.nextAttemptTime = Date.now() + this.config.timeout;
+      this.failureCount = 0;
+      this.requestCount = 0;
+    }
+  }
+
+  /**
+   * Check if circuit should open based on thresholds
+   */
+  private shouldOpen(): boolean {
+    // Need minimum volume to evaluate
+    if (this.requestCount < this.config.volumeThreshold) {
+      return false;
+    }
+
+    // Check consecutive failure threshold
+    if (this.failureCount >= this.config.failureThreshold) {
+      return true;
+    }
+
+    // Check error percentage threshold
+    const errorPercentage = this.getErrorPercentage();
+    if (errorPercentage >= this.config.errorPercentageThreshold) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Get current error percentage
+   */
+  private getErrorPercentage(): number {
+    if (this.requestCount === 0) return 0;
+    return (this.failureCount / this.requestCount) * 100;
+  }
+
+  /**
+   * Get current circuit state
+   */
+  getState(): CircuitState {
+    return this.state;
+  }
+
+  /**
+   * Get circuit breaker statistics
+   */
+  getStats(): CircuitBreakerStats {
+    return {
+      name: this.name,
+      state: this.state,
+      failureCount: this.failureCount,
+      successCount: this.successCount,
+      requestCount: this.requestCount,
+      errorPercentage: this.getErrorPercentage(),
+      lastFailureTime: this.lastFailureTime,
+      nextAttemptTime: this.nextAttemptTime,
+    };
+  }
+
+  /**
+   * Force reset circuit to CLOSED state
+   * Useful for manual recovery or testing
+   */
+  reset(): void {
+    this.state = CircuitState.CLOSED;
+    this.failureCount = 0;
+    this.successCount = 0;
+    this.requestCount = 0;
+    this.lastFailureTime = 0;
+    this.nextAttemptTime = 0;
+    console.log(`[CircuitBreaker:${this.name}] Manually reset to CLOSED`);
+  }
+}
+
+/**
+ * Predefined circuit breaker configurations for different handler priorities
+ */
+export const CIRCUIT_BREAKER_CONFIGS = {
+  /** Critical handlers (PagerDuty) - more tolerant of failures */
+  critical: {
+    failureThreshold: 10,
+    successThreshold: 3,
+    timeout: 60000, // 1 minute
+    volumeThreshold: 20,
+    errorPercentageThreshold: 70,
+  },
+  /** Standard handlers (Loki, Datadog) - balanced configuration */
+  standard: {
+    failureThreshold: 5,
+    successThreshold: 2,
+    timeout: 30000, // 30 seconds
+    volumeThreshold: 10,
+    errorPercentageThreshold: 50,
+  },
+  /** Non-critical handlers (Prometheus) - fail fast */
+  noncritical: {
+    failureThreshold: 3,
+    successThreshold: 1,
+    timeout: 15000, // 15 seconds
+    volumeThreshold: 5,
+    errorPercentageThreshold: 30,
+  },
+} as const;
+
+/**
  * Backend handler configuration
  */
 export interface BackendConfig {
@@ -329,6 +597,16 @@ export interface BackendConfig {
   batchSize?: number;
   /** Flush interval in milliseconds */
   flushInterval?: number;
+  /** Circuit breaker configuration (optional, uses 'standard' if not specified) */
+  circuitBreaker?: CircuitBreakerConfig | false; // false to disable
+}
+
+/**
+ * Extended handler with circuit breaker access
+ */
+export interface HandlerWithCircuitBreaker extends HandlerWithFlush {
+  getCircuitBreakerStats?: () => CircuitBreakerStats;
+  resetCircuitBreaker?: () => void;
 }
 
 /**
@@ -340,9 +618,21 @@ export interface BackendConfig {
  *
  * @throws Error if routing_key is invalid or endpoint is unreachable
  */
-export function createPagerDutyHandler(config: BackendConfig) {
+export function createPagerDutyHandler(
+  config: BackendConfig
+): HandlerWithCircuitBreaker {
   const { endpoint, apiKey } = config;
   const severityMap = SEVERITY_MAPPINGS.pagerduty;
+
+  // Initialize circuit breaker
+  const circuitBreakerConfig =
+    config.circuitBreaker === false
+      ? null
+      : config.circuitBreaker || CIRCUIT_BREAKER_CONFIGS.critical;
+
+  const circuitBreaker = circuitBreakerConfig
+    ? new CircuitBreaker("pagerduty", circuitBreakerConfig)
+    : null;
 
   if (!endpoint || !apiKey) {
     console.warn(
@@ -350,51 +640,80 @@ export function createPagerDutyHandler(config: BackendConfig) {
     );
   }
 
-  return async (log: LogEntry): Promise<void> => {
+  const handler: HandlerWithCircuitBreaker = async (
+    log: LogEntry
+  ): Promise<void> => {
     if (!endpoint || !apiKey) {
       return;
     }
 
-    await concurrencyLimiter.run(async () => {
-      await retryWithBackoff(
-        async () => {
-          const payload = {
-            schema: SCHEMA_VERSION,
-            routing_key: apiKey,
-            event_action: "trigger",
-            payload: {
-              summary: log.message,
-              severity: severityMap[log.level] || "warning",
-              source: log.topic || "dsp-pipeline",
-              timestamp: new Date(
-                normalizeTimestamp(log.timestamp, "ms")
-              ).toISOString(),
-              custom_details: {
-                ...log.context,
-                traceId: log.traceId,
-                spanId: log.spanId,
-                correlationId: log.correlationId,
-              },
-            },
-          };
-
-          try {
-            await postJSON(endpoint, payload, config.headers, "POST", log);
-          } catch (error) {
-            if (error instanceof Error && error.message.includes("401")) {
-              throw new Error(
-                `PagerDuty authentication failed: Invalid routing_key. Check your Integration Key.`
-              );
-            }
-            throw error;
-          }
-        },
-        3,
-        // Retry callback (unused here, but could increment logger metrics)
-        undefined
+    // Fast fail if circuit is open
+    if (circuitBreaker && circuitBreaker.getState() === CircuitState.OPEN) {
+      console.debug(
+        `[PagerDuty] Circuit OPEN - dropping log: ${log.message.substring(
+          0,
+          50
+        )}...`
       );
+      return;
+    }
+
+    await concurrencyLimiter.run(async () => {
+      const executeRequest = async () => {
+        await retryWithBackoff(
+          async () => {
+            const payload = {
+              schema: SCHEMA_VERSION,
+              routing_key: apiKey,
+              event_action: "trigger",
+              payload: {
+                summary: log.message,
+                severity: severityMap[log.level] || "warning",
+                source: log.topic || "dsp-pipeline",
+                timestamp: new Date(
+                  normalizeTimestamp(log.timestamp, "ms")
+                ).toISOString(),
+                custom_details: {
+                  ...log.context,
+                  traceId: log.traceId,
+                  spanId: log.spanId,
+                  correlationId: log.correlationId,
+                },
+              },
+            };
+
+            try {
+              await postJSON(endpoint, payload, config.headers, "POST", log);
+            } catch (error) {
+              if (error instanceof Error && error.message.includes("401")) {
+                throw new Error(
+                  `PagerDuty authentication failed: Invalid routing_key. Check your Integration Key.`
+                );
+              }
+              throw error;
+            }
+          },
+          3,
+          undefined
+        );
+      };
+
+      // Execute with circuit breaker protection
+      if (circuitBreaker) {
+        await circuitBreaker.execute(executeRequest);
+      } else {
+        await executeRequest();
+      }
     });
   };
+
+  // Expose circuit breaker stats
+  if (circuitBreaker) {
+    handler.getCircuitBreakerStats = () => circuitBreaker.getStats();
+    handler.resetCircuitBreaker = () => circuitBreaker.reset();
+  }
+
+  return handler;
 }
 
 /**
@@ -407,8 +726,20 @@ export function createPagerDutyHandler(config: BackendConfig) {
  *
  * @throws Error if authentication fails or endpoint is unreachable
  */
-export function createPrometheusHandler(config: BackendConfig) {
+export function createPrometheusHandler(
+  config: BackendConfig
+): HandlerWithCircuitBreaker {
   const { endpoint } = config;
+
+  // Initialize circuit breaker
+  const circuitBreakerConfig =
+    config.circuitBreaker === false
+      ? null
+      : config.circuitBreaker || CIRCUIT_BREAKER_CONFIGS.noncritical;
+
+  const circuitBreaker = circuitBreakerConfig
+    ? new CircuitBreaker("prometheus", circuitBreakerConfig)
+    : null;
 
   if (!endpoint) {
     console.warn(
@@ -416,56 +747,89 @@ export function createPrometheusHandler(config: BackendConfig) {
     );
   }
 
-  return async (log: LogEntry): Promise<void> => {
+  const handler: HandlerWithCircuitBreaker = async (
+    log: LogEntry
+  ): Promise<void> => {
     if (!endpoint) {
       return;
     }
 
+    // Fast fail if circuit is open
+    if (circuitBreaker && circuitBreaker.getState() === CircuitState.OPEN) {
+      console.debug(
+        `[Prometheus] Circuit OPEN - dropping metric: ${log.topic || "unknown"}`
+      );
+      return;
+    }
+
     await concurrencyLimiter.run(async () => {
-      await retryWithBackoff(async () => {
-        // Convert log to Prometheus metrics format
-        const metricName = log.topic?.replace(/\./g, "_") || "pipeline_metric";
-        const labels = Object.entries(log.context || {})
-          .map(([key, value]) => `${key}="${value}"`)
-          .join(",");
+      const executeRequest = async () => {
+        await retryWithBackoff(async () => {
+          // Convert log to Prometheus metrics format
+          const metricName =
+            log.topic?.replace(/\./g, "_") || "pipeline_metric";
+          const labels = Object.entries(log.context || {})
+            .map(([key, value]) => `${key}="${value}"`)
+            .join(",");
 
-        const timestamp = normalizeTimestamp(log.timestamp, "ms");
-        const metric = `${metricName}{${labels},schema="${SCHEMA_VERSION}"} ${
-          log.context?.value || 1
-        } ${timestamp}`;
+          const timestamp = normalizeTimestamp(log.timestamp, "ms");
+          const metric = `${metricName}{${labels},schema="${SCHEMA_VERSION}"} ${
+            log.context?.value || 1
+          } ${timestamp}`;
 
-        try {
-          const response = await fetch(`${endpoint}/metrics/job/dsp_pipeline`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "text/plain",
-              ...config.headers,
-            },
-            body: metric,
-          });
+          try {
+            const response = await fetch(
+              `${endpoint}/metrics/job/dsp_pipeline`,
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "text/plain",
+                  ...config.headers,
+                },
+                body: metric,
+              }
+            );
 
-          if (!response.ok) {
-            if (response.status === 401 || response.status === 403) {
+            if (!response.ok) {
+              if (response.status === 401 || response.status === 403) {
+                throw new Error(
+                  `Prometheus authentication failed (${response.status}). Check config.headers for HTTP Basic Auth credentials.`
+                );
+              }
               throw new Error(
-                `Prometheus authentication failed (${response.status}). Check config.headers for HTTP Basic Auth credentials.`
+                `HTTP ${response.status} - ${response.statusText}`
               );
             }
-            throw new Error(`HTTP ${response.status} - ${response.statusText}`);
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message.includes("ECONNREFUSED")
+            ) {
+              throw new Error(
+                `Prometheus Pushgateway unreachable at ${endpoint}. Check network and endpoint.`
+              );
+            }
+            throw error;
           }
-        } catch (error) {
-          if (
-            error instanceof Error &&
-            error.message.includes("ECONNREFUSED")
-          ) {
-            throw new Error(
-              `Prometheus Pushgateway unreachable at ${endpoint}. Check network and endpoint.`
-            );
-          }
-          throw error;
-        }
-      });
+        });
+      };
+
+      // Execute with circuit breaker protection
+      if (circuitBreaker) {
+        await circuitBreaker.execute(executeRequest);
+      } else {
+        await executeRequest();
+      }
     });
   };
+
+  // Expose circuit breaker stats
+  if (circuitBreaker) {
+    handler.getCircuitBreakerStats = () => circuitBreaker.getStats();
+    handler.resetCircuitBreaker = () => circuitBreaker.reset();
+  }
+
+  return handler;
 }
 
 /**
@@ -594,8 +958,20 @@ export function createLokiHandler(config: BackendConfig): HandlerWithFlush {
  * @deprecated Consider using AWS SDK instead for production use
  * @throws Error if credentials are invalid or permissions are insufficient
  */
-export function createCloudWatchHandler(config: BackendConfig) {
+export function createCloudWatchHandler(
+  config: BackendConfig
+): HandlerWithCircuitBreaker {
   const { endpoint, apiKey } = config;
+
+  // Initialize circuit breaker
+  const circuitBreakerConfig =
+    config.circuitBreaker === false
+      ? null
+      : config.circuitBreaker || CIRCUIT_BREAKER_CONFIGS.noncritical;
+
+  const circuitBreaker = circuitBreakerConfig
+    ? new CircuitBreaker("cloudwatch", circuitBreakerConfig)
+    : null;
 
   if (!endpoint || !apiKey) {
     console.warn(
@@ -605,54 +981,84 @@ export function createCloudWatchHandler(config: BackendConfig) {
     );
   }
 
-  return async (log: LogEntry): Promise<void> => {
+  const handler: HandlerWithCircuitBreaker = async (
+    log: LogEntry
+  ): Promise<void> => {
     if (!endpoint) {
       return;
     }
 
-    await concurrencyLimiter.run(async () => {
-      await retryWithBackoff(async () => {
-        const payload = {
-          schema: SCHEMA_VERSION,
-          logGroupName: "/dsp-pipeline/logs",
-          logStreamName: log.topic || "default",
-          logEvents: [
-            {
-              message: JSON.stringify({
-                level: log.level,
-                message: log.message,
-                ...log.context,
-              }),
-              timestamp: normalizeTimestamp(log.timestamp, "ms"),
-            },
-          ],
-        };
+    // Fast fail if circuit is open
+    if (circuitBreaker && circuitBreaker.getState() === CircuitState.OPEN) {
+      console.debug(
+        `[CloudWatch] Circuit OPEN - dropping log: ${log.message.substring(
+          0,
+          50
+        )}...`
+      );
+      return;
+    }
 
-        try {
-          await postJSON(endpoint, payload, {
-            "Content-Type": "application/x-amz-json-1.1",
-            "X-Amz-Target": "Logs_20140328.PutLogEvents",
-            Authorization: apiKey || "",
-            ...config.headers,
-          });
-        } catch (error) {
-          if (error instanceof Error) {
-            if (
-              error.message.includes("403") ||
-              error.message.includes("UnauthorizedOperation") ||
-              error.message.includes("InvalidClientTokenId")
-            ) {
-              throw new Error(
-                `CloudWatch authentication failed. AWS requires proper IAM credentials and request signing. ` +
-                  `Consider using @aws-sdk/client-cloudwatch-logs instead of manual fetch. Error: ${error.message}`
-              );
+    await concurrencyLimiter.run(async () => {
+      const executeRequest = async () => {
+        await retryWithBackoff(async () => {
+          const payload = {
+            schema: SCHEMA_VERSION,
+            logGroupName: "/dsp-pipeline/logs",
+            logStreamName: log.topic || "default",
+            logEvents: [
+              {
+                message: JSON.stringify({
+                  level: log.level,
+                  message: log.message,
+                  ...log.context,
+                }),
+                timestamp: normalizeTimestamp(log.timestamp, "ms"),
+              },
+            ],
+          };
+
+          try {
+            await postJSON(endpoint, payload, {
+              "Content-Type": "application/x-amz-json-1.1",
+              "X-Amz-Target": "Logs_20140328.PutLogEvents",
+              Authorization: apiKey || "",
+              ...config.headers,
+            });
+          } catch (error) {
+            if (error instanceof Error) {
+              if (
+                error.message.includes("403") ||
+                error.message.includes("UnauthorizedOperation") ||
+                error.message.includes("InvalidClientTokenId")
+              ) {
+                throw new Error(
+                  `CloudWatch authentication failed. AWS requires proper IAM credentials and request signing. ` +
+                    `Consider using @aws-sdk/client-cloudwatch-logs instead of manual fetch. Error: ${error.message}`
+                );
+              }
             }
+            throw error;
           }
-          throw error;
-        }
-      });
+        });
+      };
+
+      // Execute with circuit breaker protection
+      if (circuitBreaker) {
+        await circuitBreaker.execute(executeRequest);
+      } else {
+        await executeRequest();
+      }
     });
   };
+
+  // Expose circuit breaker stats
+  if (circuitBreaker) {
+    handler.getCircuitBreakerStats = () => circuitBreaker.getStats();
+    handler.resetCircuitBreaker = () => circuitBreaker.reset();
+  }
+
+  return handler;
 }
 
 /**
@@ -664,10 +1070,22 @@ export function createCloudWatchHandler(config: BackendConfig) {
  *
  * @throws Error if API key is invalid or endpoint is incorrect
  */
-export function createDatadogHandler(config: BackendConfig) {
+export function createDatadogHandler(
+  config: BackendConfig
+): HandlerWithCircuitBreaker {
   const { endpoint = "https://http-intake.logs.datadoghq.com", apiKey } =
     config;
   const severityMap = SEVERITY_MAPPINGS.datadog;
+
+  // Initialize circuit breaker
+  const circuitBreakerConfig =
+    config.circuitBreaker === false
+      ? null
+      : config.circuitBreaker || CIRCUIT_BREAKER_CONFIGS.standard;
+
+  const circuitBreaker = circuitBreakerConfig
+    ? new CircuitBreaker("datadog", circuitBreakerConfig)
+    : null;
 
   if (!apiKey) {
     console.warn(
@@ -675,51 +1093,81 @@ export function createDatadogHandler(config: BackendConfig) {
     );
   }
 
-  return async (log: LogEntry): Promise<void> => {
+  const handler: HandlerWithCircuitBreaker = async (
+    log: LogEntry
+  ): Promise<void> => {
     if (!apiKey) {
       return;
     }
 
-    await concurrencyLimiter.run(async () => {
-      await retryWithBackoff(async () => {
-        const payload = {
-          schema: SCHEMA_VERSION,
-          ddsource: "dsp-pipeline",
-          ddtags: `topic:${log.topic},level:${log.level}`,
-          hostname: "localhost",
-          message: log.message,
-          service: "dsp-pipeline",
-          status: severityMap[log.level] || "info",
-          timestamp: normalizeTimestamp(log.timestamp, "ms"),
-          dd: {
-            trace_id: log.traceId,
-            span_id: log.spanId,
-          },
-          ...log.context,
-        };
+    // Fast fail if circuit is open
+    if (circuitBreaker && circuitBreaker.getState() === CircuitState.OPEN) {
+      console.debug(
+        `[Datadog] Circuit OPEN - dropping log: ${log.message.substring(
+          0,
+          50
+        )}...`
+      );
+      return;
+    }
 
-        try {
-          await postJSON(
-            `${endpoint}/v1/input/${apiKey}`,
-            payload,
-            config.headers
-          );
-        } catch (error) {
-          if (error instanceof Error) {
-            if (
-              error.message.includes("403") ||
-              error.message.includes("401")
-            ) {
-              throw new Error(
-                `Datadog authentication failed. Check apiKey validity and regional endpoint (US vs EU). Error: ${error.message}`
-              );
+    await concurrencyLimiter.run(async () => {
+      const executeRequest = async () => {
+        await retryWithBackoff(async () => {
+          const payload = {
+            schema: SCHEMA_VERSION,
+            ddsource: "dsp-pipeline",
+            ddtags: `topic:${log.topic},level:${log.level}`,
+            hostname: "localhost",
+            message: log.message,
+            service: "dsp-pipeline",
+            status: severityMap[log.level] || "info",
+            timestamp: normalizeTimestamp(log.timestamp, "ms"),
+            dd: {
+              trace_id: log.traceId,
+              span_id: log.spanId,
+            },
+            ...log.context,
+          };
+
+          try {
+            await postJSON(
+              `${endpoint}/v1/input/${apiKey}`,
+              payload,
+              config.headers
+            );
+          } catch (error) {
+            if (error instanceof Error) {
+              if (
+                error.message.includes("403") ||
+                error.message.includes("401")
+              ) {
+                throw new Error(
+                  `Datadog authentication failed. Check apiKey validity and regional endpoint (US vs EU). Error: ${error.message}`
+                );
+              }
             }
+            throw error;
           }
-          throw error;
-        }
-      });
+        });
+      };
+
+      // Execute with circuit breaker protection
+      if (circuitBreaker) {
+        await circuitBreaker.execute(executeRequest);
+      } else {
+        await executeRequest();
+      }
     });
   };
+
+  // Expose circuit breaker stats
+  if (circuitBreaker) {
+    handler.getCircuitBreakerStats = () => circuitBreaker.getStats();
+    handler.resetCircuitBreaker = () => circuitBreaker.reset();
+  }
+
+  return handler;
 }
 
 /**

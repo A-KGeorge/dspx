@@ -64,9 +64,7 @@ T MovingVarianceFilter<T>::addSample(T newValue)
 
     // Return the new variance
     return getVariance();
-}
-
-// -----------------------------------------------------------------------------
+} // -----------------------------------------------------------------------------
 // Method: addSampleWithTimestamp
 // -----------------------------------------------------------------------------
 template <typename T>

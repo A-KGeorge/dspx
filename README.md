@@ -1,7 +1,6 @@
 # Work in Progress
 
 > The project’s in heavy development.  
-> Once Phases 1 and 2 (core DSP + FFT/IIR/FIR) are stable, I’ll push the first npm release.  
 > Expect breaking changes until then!
 
 # dspx
