@@ -135,6 +135,7 @@ namespace dsp
             std::vector<T> m_coefficients; // Filter coefficients (b[0], b[1], ..., b[M])
             std::vector<T> m_state;        // Sample history (x[n-1], x[n-2], ..., x[n-M])
             size_t m_stateIndex;           // Current position in circular state buffer
+            size_t m_stateMask;            // Bitmask for power-of-2 circular buffer (replaces modulo)
             bool m_stateful;               // Whether to maintain state between calls
 
             /**

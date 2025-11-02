@@ -23,6 +23,7 @@
 #include <vector>
 #include <cmath>
 #include <memory>
+#include "Fftpack.h"
 
 namespace dsp
 {
@@ -174,6 +175,9 @@ namespace dsp
 
             // Working buffer for in-place operations
             std::vector<Complex> m_workBuffer;
+
+            // FFTPACK context for all sizes
+            std::unique_ptr<fftpack::FftpackContext<T>> m_fftpack;
 
             /**
              * Initialize twiddle factors: W_N^k = e^(-j2πk/N)

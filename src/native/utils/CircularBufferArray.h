@@ -32,11 +32,11 @@ namespace dsp::utils
         void pushOverwriteWithTimestamp(const T &item, double timestamp);
         size_t expireOld(double currentTimestamp);
 
-        // getters
-        size_t getCapacity() const noexcept;
-        size_t getCount() const noexcept;
-        bool isEmpty() const noexcept;
-        bool isFull() const noexcept;
+        // getters (inline for performance)
+        size_t getCapacity() const noexcept { return capacity; }
+        size_t getCount() const noexcept { return count; }
+        bool isEmpty() const noexcept { return count == 0; }
+        bool isFull() const noexcept { return count == capacity; }
         T peek() const;
         bool isTimeAware() const noexcept { return windowDuration_ms > 0.0; }
         double getWindowDuration() const noexcept { return windowDuration_ms; }

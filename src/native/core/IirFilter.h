@@ -206,8 +206,12 @@ namespace dsp
         private:
             std::vector<T> m_b_coeffs; // Feedforward coefficients (b[0], b[1], ..., b[M])
             std::vector<T> m_a_coeffs; // Feedback coefficients (a[1], a[2], ..., a[N])
-            std::vector<T> m_x_state;  // Input history (x[n-1], x[n-2], ...)
-            std::vector<T> m_y_state;  // Output history (y[n-1], y[n-2], ...)
+            std::vector<T> m_x_state;  // Input history circular buffer (x[n-1], x[n-2], ...)
+            std::vector<T> m_y_state;  // Output history circular buffer (y[n-1], y[n-2], ...)
+            size_t m_x_index;          // Current write position in x_state circular buffer
+            size_t m_y_index;          // Current write position in y_state circular buffer
+            size_t m_x_mask;           // Bitmask for x_state (power-of-2 optimization)
+            size_t m_y_mask;           // Bitmask for y_state (power-of-2 optimization)
             bool m_stateful;           // Whether to maintain state between calls
 
             /**

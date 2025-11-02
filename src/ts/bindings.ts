@@ -858,31 +858,63 @@ class DspProcessor {
    * });
    */
   filter(options: FilterOptions): this {
+    // Validate required parameters upfront
+    if (!options.type) {
+      throw new Error(
+        "Filter 'type' is required. Valid types: 'fir', 'butterworth', 'chebyshev', 'biquad'"
+      );
+    }
+
+    if (!options.mode) {
+      throw new Error(
+        "Filter 'mode' is required. Valid modes: 'lowpass', 'highpass', 'bandpass', 'bandstop', 'notch', 'peak', 'lowshelf', 'highshelf'"
+      );
+    }
+
+    // Validate sampleRate for frequency-based filters
+    if (
+      ["fir", "butterworth", "chebyshev", "biquad"].includes(options.type) &&
+      !options.sampleRate
+    ) {
+      throw new Error(
+        `Filter type '${options.type}' requires 'sampleRate' parameter. Example: { type: 'fir', mode: 'lowpass', cutoffFrequency: 1000, sampleRate: 8000, order: 51, windowType: 'hamming' }`
+      );
+    }
+
     // Create the appropriate filter based on type
     let filterInstance: FirFilter | IirFilter;
 
-    switch (options.type) {
-      case "fir":
-        filterInstance = this.createFirFilter(options);
-        break;
+    try {
+      switch (options.type) {
+        case "fir":
+          filterInstance = this.createFirFilter(options);
+          break;
 
-      case "butterworth":
-        filterInstance = this.createButterworthFilter(options);
-        break;
+        case "butterworth":
+          filterInstance = this.createButterworthFilter(options);
+          break;
 
-      case "chebyshev":
-        filterInstance = this.createChebyshevFilter(options);
-        break;
+        case "chebyshev":
+          filterInstance = this.createChebyshevFilter(options);
+          break;
 
-      case "biquad":
-        filterInstance = this.createBiquadFilter(options);
-        break;
+        case "biquad":
+          filterInstance = this.createBiquadFilter(options);
+          break;
 
-      case "iir":
-      default:
-        throw new Error(
-          `Filter type "${options.type}" not yet implemented for pipeline chaining. Use standalone filter methods instead.`
-        );
+        case "iir":
+        default:
+          throw new Error(
+            `Filter type "${options.type}" not yet implemented for pipeline chaining. Use standalone filter methods instead.`
+          );
+      }
+    } catch (error) {
+      // Wrap any filter creation errors with helpful context
+      const err = error as Error;
+      throw new Error(
+        `Failed to create ${options.type} filter (mode: ${options.mode}): ${err.message}. ` +
+          `Check that all required parameters are provided (sampleRate, cutoffFrequency/frequencies, order, etc.)`
+      );
     }
 
     // Store the filter instance for processing
@@ -890,23 +922,38 @@ class DspProcessor {
     let bCoeffs: Float64Array;
     let aCoeffs: Float64Array;
 
-    if (filterInstance instanceof FirFilter) {
-      // FIR filter: only B coefficients, A = [1]
-      const coeffs = filterInstance.getCoefficients();
-      bCoeffs = new Float64Array(coeffs);
-      aCoeffs = new Float64Array([1.0]);
-    } else if (filterInstance instanceof IirFilter) {
-      // IIR filter: both B and A coefficients
-      const bCoeffs32 = filterInstance.getBCoefficients();
-      const aCoeffs32 = filterInstance.getACoefficients();
-      bCoeffs = new Float64Array(bCoeffs32);
-      aCoeffs = new Float64Array(aCoeffs32);
-    } else {
-      throw new Error("Unknown filter type");
+    try {
+      if (filterInstance instanceof FirFilter) {
+        // FIR filter: only B coefficients, A = [1]
+        const coeffs = filterInstance.getCoefficients();
+        if (!coeffs || coeffs.length === 0) {
+          throw new Error("FIR filter returned empty coefficients");
+        }
+        bCoeffs = new Float64Array(coeffs);
+        aCoeffs = new Float64Array([1.0]);
+      } else if (filterInstance instanceof IirFilter) {
+        // IIR filter: both B and A coefficients
+        const bCoeffs32 = filterInstance.getBCoefficients();
+        const aCoeffs32 = filterInstance.getACoefficients();
+        if (!bCoeffs32 || bCoeffs32.length === 0) {
+          throw new Error("IIR filter returned empty B coefficients");
+        }
+        if (!aCoeffs32 || aCoeffs32.length === 0) {
+          throw new Error("IIR filter returned empty A coefficients");
+        }
+        bCoeffs = new Float64Array(bCoeffs32);
+        aCoeffs = new Float64Array(aCoeffs32);
+      } else {
+        throw new Error("Unknown filter type");
+      }
+
+      this.nativeInstance.addFilterStage(bCoeffs, aCoeffs);
+      this.stages.push(`filter:${options.type}:${options.mode}`);
+    } catch (error) {
+      const err = error as Error;
+      throw new Error(`Failed to add filter stage to pipeline: ${err.message}`);
     }
 
-    this.nativeInstance.addFilterStage(bCoeffs, aCoeffs);
-    this.stages.push(`filter:${options.type}:${options.mode}`);
     return this;
   }
 

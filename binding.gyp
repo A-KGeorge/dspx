@@ -13,6 +13,7 @@
         "src/native/core/WampFilter.cc",
         "src/native/core/WaveformLengthFilter.cc",
         "src/native/core/FftEngine.cc",
+        "src/native/core/Fftpack.cc",
         "src/native/core/MovingFftFilter.cc",
         "src/native/core/FirFilter.cc",
         "src/native/core/IirFilter.cc",
@@ -57,7 +58,7 @@
         "GCC_OPTIMIZATION_LEVEL": "3"
       },
       "conditions": [
-        # Condition for Windows (unchanged, but keep it)
+        # Condition for Windows
         ["OS=='win'", {
           "defines": [ "_HAS_EXCEPTIONS=1" ]
         }],

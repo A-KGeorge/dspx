@@ -100,50 +100,6 @@ void CircularBufferArray<T>::pushOverwrite(const T &item)
 }
 
 // -----------------------------------------------------------------------------
-// Getter: getCapacity
-// @ param void
-// @ return size_t - The capacity of the circular buffer
-// -----------------------------------------------------------------------------
-template <typename T>
-size_t CircularBufferArray<T>::getCapacity() const noexcept
-{
-    return this->capacity;
-}
-
-// -----------------------------------------------------------------------------
-// Getter: getCount
-// @ param void
-// @ return size_t - The number of elements in the circular buffer
-// -----------------------------------------------------------------------------
-template <typename T>
-size_t CircularBufferArray<T>::getCount() const noexcept
-{
-    return this->count;
-}
-
-// -----------------------------------------------------------------------------
-// Getter: isEmpty
-// @ param void
-// @ return bool - True if the buffer is empty, false otherwise
-// -----------------------------------------------------------------------------
-template <typename T>
-bool CircularBufferArray<T>::isEmpty() const noexcept
-{
-    return this->count == 0;
-}
-
-// -----------------------------------------------------------------------------
-// Getter: isFull
-// @ param void
-// @ return bool - True if the buffer is full, false otherwise
-// -----------------------------------------------------------------------------
-template <typename T>
-bool CircularBufferArray<T>::isFull() const noexcept
-{
-    return this->count == this->capacity;
-}
-
-// -----------------------------------------------------------------------------
 // Method: peek
 // Returns the item at the head of the circular buffer without removing it
 // @ param void

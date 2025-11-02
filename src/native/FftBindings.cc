@@ -148,26 +148,47 @@ namespace dsp
             return env.Null();
         }
 
-        // Pack into complex array
-        std::vector<Complex> input(m_size);
-        std::vector<Complex> output(m_size);
-
-        for (size_t i = 0; i < m_size; ++i)
-        {
-            input[i] = Complex(realIn[i], imagIn[i]);
-        }
-
-        // Compute FFT
-        m_engine->fft(input.data(), output.data());
-
-        // Unpack result
+        // OPTIMIZATION: Allocate output arrays first
         Napi::Float32Array realOut = Napi::Float32Array::New(env, m_size);
         Napi::Float32Array imagOut = Napi::Float32Array::New(env, m_size);
 
-        for (size_t i = 0; i < m_size; ++i)
+        // Stack allocation for small sizes
+        if (m_size <= 1024)
         {
-            realOut[i] = output[i].real();
-            imagOut[i] = output[i].imag();
+            Complex stackBuf[2048]; // input + output
+            Complex *input = stackBuf;
+            Complex *output = stackBuf + 1024;
+
+            for (size_t i = 0; i < m_size; ++i)
+            {
+                input[i] = Complex(realIn[i], imagIn[i]);
+            }
+
+            m_engine->fft(input, output);
+
+            for (size_t i = 0; i < m_size; ++i)
+            {
+                realOut[i] = output[i].real();
+                imagOut[i] = output[i].imag();
+            }
+        }
+        else
+        {
+            std::vector<Complex> input(m_size);
+            std::vector<Complex> output(m_size);
+
+            for (size_t i = 0; i < m_size; ++i)
+            {
+                input[i] = Complex(realIn[i], imagIn[i]);
+            }
+
+            m_engine->fft(input.data(), output.data());
+
+            for (size_t i = 0; i < m_size; ++i)
+            {
+                realOut[i] = output[i].real();
+                imagOut[i] = output[i].imag();
+            }
         }
 
         Napi::Object result = Napi::Object::New(env);
@@ -300,17 +321,34 @@ namespace dsp
         }
 
         size_t halfSize = m_engine->getHalfSize();
-        std::vector<Complex> output(halfSize);
 
-        m_engine->rfft(input.Data(), output.data());
-
+        // OPTIMIZATION: Allocate output arrays first, then write directly
         Napi::Float32Array realOut = Napi::Float32Array::New(env, halfSize);
         Napi::Float32Array imagOut = Napi::Float32Array::New(env, halfSize);
 
-        for (size_t i = 0; i < halfSize; ++i)
+        // Stack allocation for small sizes, heap for large
+        if (halfSize <= 1024)
         {
-            realOut[i] = output[i].real();
-            imagOut[i] = output[i].imag();
+            Complex stackOutput[1024];
+            m_engine->rfft(input.Data(), stackOutput);
+
+            // Direct write to TypedArrays (no intermediate vector)
+            for (size_t i = 0; i < halfSize; ++i)
+            {
+                realOut[i] = stackOutput[i].real();
+                imagOut[i] = stackOutput[i].imag();
+            }
+        }
+        else
+        {
+            std::vector<Complex> output(halfSize);
+            m_engine->rfft(input.Data(), output.data());
+
+            for (size_t i = 0; i < halfSize; ++i)
+            {
+                realOut[i] = output[i].real();
+                imagOut[i] = output[i].imag();
+            }
         }
 
         Napi::Object result = Napi::Object::New(env);
@@ -329,18 +367,32 @@ namespace dsp
         Napi::Float32Array imagIn = inputObj.Get("imag").As<Napi::Float32Array>();
 
         size_t halfSize = m_engine->getHalfSize();
-        std::vector<Complex> input(halfSize);
-        std::vector<float> output(m_size);
 
-        for (size_t i = 0; i < halfSize; ++i)
-        {
-            input[i] = Complex(realIn[i], imagIn[i]);
-        }
-
-        m_engine->irfft(input.data(), output.data());
-
+        // OPTIMIZATION: Allocate output first
         Napi::Float32Array result = Napi::Float32Array::New(env, m_size);
-        std::copy(output.begin(), output.end(), result.Data());
+
+        // Stack allocation for small sizes
+        if (halfSize <= 1024)
+        {
+            Complex stackInput[1024];
+            for (size_t i = 0; i < halfSize; ++i)
+            {
+                stackInput[i] = Complex(realIn[i], imagIn[i]);
+            }
+
+            // Write directly to output TypedArray data
+            m_engine->irfft(stackInput, result.Data());
+        }
+        else
+        {
+            std::vector<Complex> input(halfSize);
+            for (size_t i = 0; i < halfSize; ++i)
+            {
+                input[i] = Complex(realIn[i], imagIn[i]);
+            }
+
+            m_engine->irfft(input.data(), result.Data());
+        }
 
         return result;
     }

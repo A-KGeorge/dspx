@@ -21,7 +21,7 @@ namespace dsp
 
         template <typename T>
         FirFilter<T>::FirFilter(const std::vector<T> &coefficients, bool stateful)
-            : m_coefficients(coefficients), m_stateIndex(0), m_stateful(stateful)
+            : m_coefficients(coefficients), m_stateIndex(0), m_stateMask(0), m_stateful(stateful)
         {
             if (coefficients.empty())
             {
@@ -30,8 +30,16 @@ namespace dsp
 
             if (stateful)
             {
-                // Allocate state buffer (need M previous samples)
-                m_state.resize(coefficients.size(), T(0));
+                // Round up to next power of 2 for efficient circular buffer (enables bitwise AND instead of modulo)
+                size_t stateSize = coefficients.size();
+                size_t powerOf2 = 1;
+                while (powerOf2 < stateSize)
+                {
+                    powerOf2 <<= 1;
+                }
+
+                m_state.resize(powerOf2, T(0));
+                m_stateMask = powerOf2 - 1; // For fast modulo: index & mask == index % size
             }
         }
 
@@ -46,37 +54,31 @@ namespace dsp
             // Store input in circular buffer
             m_state[m_stateIndex] = input;
 
-            // Compute output via SIMD-optimized convolution
+            // Compute output directly from circular buffer (no copy needed)
             T output = T(0);
 
-            if constexpr (std::is_same_v<T, float>)
-            {
-                // Build aligned buffer for SIMD (coefficients are in reverse order for convolution)
-                std::vector<float> aligned_samples(m_coefficients.size());
+            // Use unrolled scalar loop for both float and double
+            // Modern compilers auto-vectorize this better than manual SIMD with data gather
+            const size_t numCoeffs = m_coefficients.size();
+            size_t i = 0;
 
-                // Copy samples in correct order for dot product
-                for (size_t i = 0; i < m_coefficients.size(); ++i)
-                {
-                    size_t stateIdx = (m_stateIndex + m_state.size() - i) % m_state.size();
-                    aligned_samples[i] = m_state[stateIdx];
-                }
-
-                // SIMD dot product
-                output = simd::dot_product(aligned_samples.data(), m_coefficients.data(),
-                                           m_coefficients.size());
-            }
-            else
+            // Process 4 coefficients at a time (loop unrolling for ILP)
+            for (; i + 3 < numCoeffs; i += 4)
             {
-                // Scalar convolution for double
-                for (size_t i = 0; i < m_coefficients.size(); ++i)
-                {
-                    size_t stateIdx = (m_stateIndex + m_state.size() - i) % m_state.size();
-                    output += m_coefficients[i] * m_state[stateIdx];
-                }
+                output += m_coefficients[i] * m_state[(m_stateIndex - i) & m_stateMask];
+                output += m_coefficients[i + 1] * m_state[(m_stateIndex - i - 1) & m_stateMask];
+                output += m_coefficients[i + 2] * m_state[(m_stateIndex - i - 2) & m_stateMask];
+                output += m_coefficients[i + 3] * m_state[(m_stateIndex - i - 3) & m_stateMask];
             }
 
-            // Advance circular buffer index
-            m_stateIndex = (m_stateIndex + 1) % m_state.size();
+            // Handle remaining coefficients
+            for (; i < numCoeffs; ++i)
+            {
+                output += m_coefficients[i] * m_state[(m_stateIndex - i) & m_stateMask];
+            }
+
+            // Advance circular buffer index (bitwise AND instead of modulo)
+            m_stateIndex = (m_stateIndex + 1) & m_stateMask;
 
             return output;
         }
@@ -126,10 +128,37 @@ namespace dsp
             }
             else
             {
-                // Stateful mode: use processSample for each input
+                // Stateful mode: optimized inline block processing
+                // Direct access to state buffer with bitwise masking - no copying
+                const size_t numCoeffs = m_coefficients.size();
+
                 for (size_t i = 0; i < length; ++i)
                 {
-                    output[i] = processSample(input[i]);
+                    // Update state with new sample
+                    m_stateIndex = (m_stateIndex + 1) & m_stateMask;
+                    m_state[m_stateIndex] = input[i];
+
+                    // Compute convolution directly from circular buffer (no copy)
+                    // Loop unrolling for instruction-level parallelism
+                    T sum = 0;
+                    size_t j = 0;
+
+                    // Process 4 coefficients at a time (unrolled)
+                    for (; j + 3 < numCoeffs; j += 4)
+                    {
+                        sum += m_coefficients[j] * m_state[(m_stateIndex - j) & m_stateMask];
+                        sum += m_coefficients[j + 1] * m_state[(m_stateIndex - j - 1) & m_stateMask];
+                        sum += m_coefficients[j + 2] * m_state[(m_stateIndex - j - 2) & m_stateMask];
+                        sum += m_coefficients[j + 3] * m_state[(m_stateIndex - j - 3) & m_stateMask];
+                    }
+
+                    // Handle remaining samples
+                    for (; j < numCoeffs; ++j)
+                    {
+                        sum += m_coefficients[j] * m_state[(m_stateIndex - j) & m_stateMask];
+                    }
+
+                    output[i] = sum;
                 }
             }
         }
@@ -156,7 +185,16 @@ namespace dsp
 
             if (m_stateful)
             {
-                m_state.resize(coefficients.size(), T(0));
+                // Round up to next power of 2
+                size_t stateSize = coefficients.size();
+                size_t powerOf2 = 1;
+                while (powerOf2 < stateSize)
+                {
+                    powerOf2 <<= 1;
+                }
+
+                m_state.resize(powerOf2, T(0));
+                m_stateMask = powerOf2 - 1;
                 m_stateIndex = 0;
             }
         }

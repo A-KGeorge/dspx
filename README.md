@@ -1777,9 +1777,9 @@ All 441 tests pass after these fixes. Run `npm test` to verify.
 
 ---
 
-## �📄 License
+### 📄 License
 
-MIT © Alan Kochukalam George
+Apache License 2.0 © Alan Kochukalam George
 
 ---
 

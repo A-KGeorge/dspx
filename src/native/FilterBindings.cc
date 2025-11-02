@@ -999,6 +999,7 @@ namespace dsp
         }
     };
 
+    // ============================================================================
     // Module initialization
     void InitFilterBindings(Napi::Env env, Napi::Object exports)
     {

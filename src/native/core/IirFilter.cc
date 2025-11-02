@@ -20,7 +20,7 @@ namespace dsp
 
         template <typename T>
         IirFilter<T>::IirFilter(const std::vector<T> &b_coeffs, const std::vector<T> &a_coeffs, bool stateful)
-            : m_b_coeffs(b_coeffs), m_a_coeffs(a_coeffs), m_stateful(stateful)
+            : m_b_coeffs(b_coeffs), m_a_coeffs(a_coeffs), m_x_index(0), m_y_index(0), m_x_mask(0), m_y_mask(0), m_stateful(stateful)
         {
             if (b_coeffs.empty())
             {
@@ -29,9 +29,29 @@ namespace dsp
 
             if (stateful)
             {
-                // Allocate state buffers
-                m_x_state.resize(b_coeffs.size(), T(0));
-                m_y_state.resize(a_coeffs.size(), T(0));
+                // Round state buffers to power-of-2 for O(1) circular buffer access
+                // X state needs b_coeffs.size() - 1 history (we exclude current sample)
+                size_t x_state_size = b_coeffs.size() > 1 ? b_coeffs.size() - 1 : 1;
+                size_t x_power_of_2 = 1;
+                while (x_power_of_2 < x_state_size)
+                {
+                    x_power_of_2 <<= 1;
+                }
+                m_x_state.resize(x_power_of_2, T(0));
+                m_x_mask = x_power_of_2 - 1;
+
+                // Y state needs a_coeffs.size() history
+                if (!a_coeffs.empty())
+                {
+                    size_t y_state_size = a_coeffs.size();
+                    size_t y_power_of_2 = 1;
+                    while (y_power_of_2 < y_state_size)
+                    {
+                        y_power_of_2 <<= 1;
+                    }
+                    m_y_state.resize(y_power_of_2, T(0));
+                    m_y_mask = y_power_of_2 - 1;
+                }
             }
         }
 
@@ -43,47 +63,35 @@ namespace dsp
                 throw std::runtime_error("processSample() requires stateful mode");
             }
 
-            // Direct Form II implementation
-            // Compute feedforward (numerator)
+            // Direct Form I with circular buffer (O(1) state update instead of O(N) shifting)
+            // Compute feedforward (numerator): b[0]*x[n] + b[1]*x[n-1] + ... + b[M]*x[n-M]
             T output = m_b_coeffs[0] * input;
 
+            // Read from circular buffer using bitwise AND (power-of-2 optimization)
             for (size_t i = 1; i < m_b_coeffs.size(); ++i)
             {
-                if (i - 1 < m_x_state.size())
-                {
-                    output += m_b_coeffs[i] * m_x_state[i - 1];
-                }
+                // x_state stores x[n-1], x[n-2], ..., x[n-M]
+                // Read backwards: x[n-i] is at position (m_x_index - (i-1)) & m_x_mask
+                size_t idx = (m_x_index - (i - 1)) & m_x_mask;
+                output += m_b_coeffs[i] * m_x_state[idx];
             }
 
-            // Compute feedback (denominator)
+            // Compute feedback (denominator): - (a[1]*y[n-1] + a[2]*y[n-2] + ... + a[N]*y[n-N])
             for (size_t i = 0; i < m_a_coeffs.size(); ++i)
             {
-                if (i < m_y_state.size())
-                {
-                    output -= m_a_coeffs[i] * m_y_state[i];
-                }
+                // y_state stores y[n-1], y[n-2], ..., y[n-N]
+                // Read backwards: y[n-(i+1)] is at position (m_y_index - i) & m_y_mask
+                size_t idx = (m_y_index - i) & m_y_mask;
+                output -= m_a_coeffs[i] * m_y_state[idx];
             }
 
-            // Update state buffers (shift history)
-            // Input history: x[n-1] <- x[n-2] <- ... <- x[n-M] <- input
-            for (size_t i = m_x_state.size() - 1; i > 0; --i)
-            {
-                m_x_state[i] = m_x_state[i - 1];
-            }
-            if (!m_x_state.empty())
-            {
-                m_x_state[0] = input;
-            }
+            // Update circular buffers (O(1) write operation)
+            // Advance indices and store current values
+            m_x_index = (m_x_index + 1) & m_x_mask;
+            m_x_state[m_x_index] = input;
 
-            // Output history: y[n-1] <- y[n-2] <- ... <- y[n-N] <- output
-            for (size_t i = m_y_state.size() - 1; i > 0; --i)
-            {
-                m_y_state[i] = m_y_state[i - 1];
-            }
-            if (!m_y_state.empty())
-            {
-                m_y_state[0] = output;
-            }
+            m_y_index = (m_y_index + 1) & m_y_mask;
+            m_y_state[m_y_index] = output;
 
             return output;
         }
@@ -93,9 +101,29 @@ namespace dsp
         {
             if (stateless || !m_stateful)
             {
-                // Stateless mode: use temporary state for batch
-                std::vector<T> x_temp(m_b_coeffs.size(), T(0));
-                std::vector<T> y_temp(m_a_coeffs.size(), T(0));
+                // Stateless mode: use temporary circular buffers for batch
+                size_t x_state_size = m_b_coeffs.size() > 1 ? m_b_coeffs.size() - 1 : 1;
+                size_t x_power_of_2 = 1;
+                while (x_power_of_2 < x_state_size)
+                {
+                    x_power_of_2 <<= 1;
+                }
+                std::vector<T> x_temp(x_power_of_2, T(0));
+                size_t x_mask = x_power_of_2 - 1;
+                size_t x_idx = 0;
+
+                size_t y_power_of_2 = 1;
+                if (!m_a_coeffs.empty())
+                {
+                    size_t y_state_size = m_a_coeffs.size();
+                    while (y_power_of_2 < y_state_size)
+                    {
+                        y_power_of_2 <<= 1;
+                    }
+                }
+                std::vector<T> y_temp(y_power_of_2, T(0));
+                size_t y_mask = y_power_of_2 - 1;
+                size_t y_idx = 0;
 
                 for (size_t n = 0; n < length; ++n)
                 {
@@ -103,49 +131,56 @@ namespace dsp
                     T y = m_b_coeffs[0] * input[n];
                     for (size_t i = 1; i < m_b_coeffs.size(); ++i)
                     {
-                        if (i - 1 < x_temp.size())
-                        {
-                            y += m_b_coeffs[i] * x_temp[i - 1];
-                        }
+                        size_t idx = (x_idx - (i - 1)) & x_mask;
+                        y += m_b_coeffs[i] * x_temp[idx];
                     }
 
                     // Feedback
                     for (size_t i = 0; i < m_a_coeffs.size(); ++i)
                     {
-                        if (i < y_temp.size())
-                        {
-                            y -= m_a_coeffs[i] * y_temp[i];
-                        }
+                        size_t idx = (y_idx - i) & y_mask;
+                        y -= m_a_coeffs[i] * y_temp[idx];
                     }
 
                     output[n] = y;
 
-                    // Update temporary state
-                    for (size_t i = x_temp.size() - 1; i > 0; --i)
-                    {
-                        x_temp[i] = x_temp[i - 1];
-                    }
-                    if (!x_temp.empty())
-                    {
-                        x_temp[0] = input[n];
-                    }
+                    // Update circular buffers (O(1))
+                    x_idx = (x_idx + 1) & x_mask;
+                    x_temp[x_idx] = input[n];
 
-                    for (size_t i = y_temp.size() - 1; i > 0; --i)
-                    {
-                        y_temp[i] = y_temp[i - 1];
-                    }
-                    if (!y_temp.empty())
-                    {
-                        y_temp[0] = y;
-                    }
+                    y_idx = (y_idx + 1) & y_mask;
+                    y_temp[y_idx] = y;
                 }
             }
             else
             {
-                // Stateful mode: use processSample
-                for (size_t i = 0; i < length; ++i)
+                // Stateful mode: inline processing for better performance
+                // (eliminates function call overhead compared to calling processSample)
+                for (size_t n = 0; n < length; ++n)
                 {
-                    output[i] = processSample(input[i]);
+                    // Feedforward
+                    T y = m_b_coeffs[0] * input[n];
+                    for (size_t i = 1; i < m_b_coeffs.size(); ++i)
+                    {
+                        size_t idx = (m_x_index - (i - 1)) & m_x_mask;
+                        y += m_b_coeffs[i] * m_x_state[idx];
+                    }
+
+                    // Feedback
+                    for (size_t i = 0; i < m_a_coeffs.size(); ++i)
+                    {
+                        size_t idx = (m_y_index - i) & m_y_mask;
+                        y -= m_a_coeffs[i] * m_y_state[idx];
+                    }
+
+                    output[n] = y;
+
+                    // Update state (O(1))
+                    m_x_index = (m_x_index + 1) & m_x_mask;
+                    m_x_state[m_x_index] = input[n];
+
+                    m_y_index = (m_y_index + 1) & m_y_mask;
+                    m_y_state[m_y_index] = y;
                 }
             }
         }
@@ -157,6 +192,8 @@ namespace dsp
             {
                 std::fill(m_x_state.begin(), m_x_state.end(), T(0));
                 std::fill(m_y_state.begin(), m_y_state.end(), T(0));
+                m_x_index = 0;
+                m_y_index = 0;
             }
         }
 
@@ -173,8 +210,29 @@ namespace dsp
 
             if (m_stateful)
             {
-                m_x_state.resize(b_coeffs.size(), T(0));
-                m_y_state.resize(a_coeffs.size(), T(0));
+                // Resize circular buffers to power-of-2
+                size_t x_state_size = b_coeffs.size() > 1 ? b_coeffs.size() - 1 : 1;
+                size_t x_power_of_2 = 1;
+                while (x_power_of_2 < x_state_size)
+                {
+                    x_power_of_2 <<= 1;
+                }
+                m_x_state.resize(x_power_of_2, T(0));
+                m_x_mask = x_power_of_2 - 1;
+                m_x_index = 0;
+
+                if (!a_coeffs.empty())
+                {
+                    size_t y_state_size = a_coeffs.size();
+                    size_t y_power_of_2 = 1;
+                    while (y_power_of_2 < y_state_size)
+                    {
+                        y_power_of_2 <<= 1;
+                    }
+                    m_y_state.resize(y_power_of_2, T(0));
+                    m_y_mask = y_power_of_2 - 1;
+                    m_y_index = 0;
+                }
             }
         }
 
@@ -194,6 +252,8 @@ namespace dsp
         template <typename T>
         std::pair<std::vector<T>, std::vector<T>> IirFilter<T>::getState() const
         {
+            // Return the full circular buffers (power-of-2 sized)
+            // Caller needs to be aware these may be larger than the actual filter order
             return {m_x_state, m_y_state};
         }
 
@@ -205,18 +265,21 @@ namespace dsp
                 throw std::runtime_error("setState() requires stateful mode");
             }
 
-            // Validate sizes match expected filter order
-            if (x_state.size() != m_b_coeffs.size())
+            // Accept circular buffer state (should match power-of-2 size)
+            if (x_state.size() != m_x_state.size())
             {
-                throw std::invalid_argument("x_state size must match number of b coefficients");
+                throw std::invalid_argument("x_state size must match circular buffer size");
             }
-            if (y_state.size() != m_a_coeffs.size())
+            if (y_state.size() != m_y_state.size())
             {
-                throw std::invalid_argument("y_state size must match number of a coefficients");
+                throw std::invalid_argument("y_state size must match circular buffer size");
             }
 
             m_x_state = x_state;
             m_y_state = y_state;
+            // Indices reset to 0 for consistency (caller can restore indices if needed)
+            m_x_index = 0;
+            m_y_index = 0;
         }
 
         // ========== Filter Design Methods ==========

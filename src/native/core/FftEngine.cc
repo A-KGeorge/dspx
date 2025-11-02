@@ -28,7 +28,10 @@ namespace dsp
                 throw std::invalid_argument("FFT size must be > 0");
             }
 
-            // Initialize twiddle factors and bit-reversal for FFT
+            // Initialize FFTPACK for all sizes
+            m_fftpack = std::make_unique<fftpack::FftpackContext<T>>(m_size);
+
+            // Initialize twiddle factors and bit-reversal for FFT (legacy/unused now)
             if (m_isPowerOfTwo)
             {
                 initTwiddleFactors();
@@ -122,61 +125,37 @@ namespace dsp
         template <typename T>
         void FftEngine<T>::rfft(const T *input, Complex *output)
         {
-            if (!m_isPowerOfTwo)
+            // Use FFTPACK for all sizes
+            if (m_fftpack)
             {
-                throw std::runtime_error("RFFT requires power-of-2 size. Use RDFT for arbitrary sizes.");
+                m_fftpack->rfft(input, output);
             }
-
-            // Pack real input into complex array (imaginary part = 0)
-            for (size_t i = 0; i < m_size; ++i)
+            else
             {
-                m_workBuffer[i] = Complex(input[i], 0);
-            }
-
-            // Perform standard FFT
-            cooleyTukeyFFT(m_workBuffer.data(), false);
-
-            // Copy half spectrum (exploit Hermitian symmetry)
-            size_t halfSize = getHalfSize();
-            for (size_t i = 0; i < halfSize; ++i)
-            {
-                output[i] = m_workBuffer[i];
+                // Fallback to RDFT for edge cases
+                rdft(input, output);
             }
         }
 
         template <typename T>
         void FftEngine<T>::irfft(const Complex *input, T *output)
         {
-            if (!m_isPowerOfTwo)
+            // Use FFTPACK for all sizes
+            if (m_fftpack)
             {
-                throw std::runtime_error("IRFFT requires power-of-2 size. Use IRDFT for arbitrary sizes.");
+                m_fftpack->irfft(input, output);
+
+                // FFTPACK doesn't normalize, so apply 1/N scaling
+                T scale = T(1) / static_cast<T>(m_size);
+                for (size_t i = 0; i < m_size; ++i)
+                {
+                    output[i] *= scale;
+                }
             }
-
-            size_t halfSize = getHalfSize();
-
-            // Reconstruct full spectrum using Hermitian symmetry: X[N-k] = X*[k]
-            m_workBuffer[0] = input[0]; // DC component
-
-            for (size_t i = 1; i < halfSize - 1; ++i)
+            else
             {
-                m_workBuffer[i] = input[i];
-                m_workBuffer[m_size - i] = std::conj(input[i]);
-            }
-
-            // Nyquist frequency (if N is even)
-            if (m_size % 2 == 0)
-            {
-                m_workBuffer[m_size / 2] = input[halfSize - 1];
-            }
-
-            // Perform inverse FFT
-            cooleyTukeyFFT(m_workBuffer.data(), true);
-
-            // Extract real part and scale by 1/N
-            T scale = T(1) / static_cast<T>(m_size);
-            for (size_t i = 0; i < m_size; ++i)
-            {
-                output[i] = m_workBuffer[i].real() * scale;
+                // Fallback to IRDFT for edge cases
+                irdft(input, output);
             }
         }
 

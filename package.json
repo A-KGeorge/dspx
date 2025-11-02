@@ -37,7 +37,7 @@
     "biosignal"
   ],
   "author": "Alan Kochukalam George",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "dependencies": {
     "cross-env": "^7.0.3",
