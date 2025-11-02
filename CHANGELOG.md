@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.9
+
+### Minor Changes
+
+- [`63c3b35`](https://github.com/A-KGeorge/dspx/commit/63c3b35b6e8aaf121a0fc50ea2571d89946e17e9) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - optimized fft, fir, and iir
+
 ## 0.2.0-alpha.8
 
 ### Minor Changes
