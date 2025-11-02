@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.7
+
+### Minor Changes
+
+- [`baf4d07`](https://github.com/A-KGeorge/dspx/commit/baf4d07d2755afb75a5a056555b448e0b1d1e254) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Used SimdOps with FFT properly
+
 ## 0.2.0-alpha.6
 
 ### Patch Changes
