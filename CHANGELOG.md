@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.8
+
+### Minor Changes
+
+- [`893cb30`](https://github.com/A-KGeorge/dspx/commit/893cb304a6651193a341be9d5a5d0567b232fde4) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Added circuit breaker for backend logging
+
 ## 0.2.0-alpha.7
 
 ### Minor Changes
