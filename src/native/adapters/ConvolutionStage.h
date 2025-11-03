@@ -347,74 +347,9 @@ namespace dsp::adapters
         void processBatchDirect(float *buffer, size_t numSamples, int numChannels)
         {
             size_t samplesPerChannel = numSamples / numChannels;
-
-#if defined(__ARM_NEON) || defined(__aarch64__)
-            // ARM NEON path: Use FirFilterNeon for optimal performance
-            // This eliminates per-sample gather overhead with O(1) circular buffer
-
-            // Initialize FIR filters for each channel (only once)
-            if (m_batch_fir_filters.size() != static_cast<size_t>(numChannels))
-            {
-                m_batch_fir_filters.clear();
-                for (int ch = 0; ch < numChannels; ++ch)
-                {
-                    m_batch_fir_filters.push_back(
-                        std::make_unique<core::FirFilterNeon>(m_kernel));
-                }
-            }
-
-            // Resize de-interleaved buffers if needed
-            if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
-            {
-                m_deinterleaved_buffers.resize(numChannels);
-                for (auto &buf : m_deinterleaved_buffers)
-                {
-                    buf.resize(samplesPerChannel);
-                }
-            }
-            else if (!m_deinterleaved_buffers.empty() &&
-                     m_deinterleaved_buffers[0].size() != samplesPerChannel)
-            {
-                for (auto &buf : m_deinterleaved_buffers)
-                {
-                    buf.resize(samplesPerChannel);
-                }
-            }
-
-            // Step 1: De-interleave and process each channel with FirFilterNeon
-            for (int ch = 0; ch < numChannels; ++ch)
-            {
-                auto &fir = m_batch_fir_filters[ch];
-                auto &channel_buffer = m_deinterleaved_buffers[ch];
-
-                // Reset filter state for batch mode (stateless)
-                fir->reset();
-
-                // De-interleave: Extract channel samples
-                for (size_t i = 0; i < samplesPerChannel; ++i)
-                {
-                    channel_buffer[i] = buffer[i * numChannels + ch];
-                }
-
-                // Process the ENTIRE de-interleaved batch at once
-                // This uses the 4x tiled processBatchNeon function!
-                fir->processBatch(channel_buffer.data(), samplesPerChannel);
-            }
-
-            // Step 2: Re-interleave output back to buffer
-            for (int ch = 0; ch < numChannels; ++ch)
-            {
-                const auto &channel_buffer = m_deinterleaved_buffers[ch];
-                for (size_t i = 0; i < samplesPerChannel; ++i)
-                {
-                    buffer[i * numChannels + ch] = channel_buffer[i];
-                }
-            }
-#else
-            // Non-ARM fallback: Original scalar implementation
             size_t kernelSize = m_kernel.size();
 
-            // Resize de-interleaved buffers if channel count changed
+            // Resize de-interleaved buffers if needed
             if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
             {
                 m_deinterleaved_buffers.resize(numChannels);
@@ -478,12 +413,9 @@ namespace dsp::adapters
                     buffer[i * numChannels + ch] = output[i];
                 }
             }
-#endif
-        }
-
-        /**
-         * @brief Initialize overlap-add FFT state for each channel.
-         */
+        } /**
+           * @brief Initialize overlap-add FFT state for each channel.
+           */
         void initializeOverlapAdd(int numChannels)
         {
             if (!m_is_initialized || static_cast<int>(m_overlap_buffers.size()) != numChannels)
