@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.11
+
+### Minor Changes
+
+- [`fd0518d`](https://github.com/A-KGeorge/dspx/commit/fd0518de4a3d922d9fe8be6ba4f92a2a0fa85a31) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Add prebuild for linux-arm64
+
 ## 0.2.0-alpha.10
 
 ### Minor Changes
