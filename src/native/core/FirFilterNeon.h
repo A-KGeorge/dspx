@@ -66,9 +66,8 @@ namespace dsp::core
             m_coefficients = coefficients;
 
             // Allocate state buffer + guard zone
-            // Guard zone size = max NEON vector width (16 floats = 64 bytes)
-            constexpr size_t GUARD_SIZE = 16;
-            m_state.resize(m_bufferSize + GUARD_SIZE, 0.0f);
+            // Guard zone mirrors the entire circular buffer for contiguous wraparound reads
+            m_state.resize(m_bufferSize * 2, 0.0f);
         }
 
         /**
