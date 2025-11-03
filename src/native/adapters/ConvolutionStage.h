@@ -193,11 +193,6 @@ namespace dsp::adapters
         // For direct method (stateful) - per-channel history
         std::vector<utils::SlidingWindowFilter<float, utils::ConvolutionPolicy<float>>> m_filters;
 
-        // High-performance linear buffers for moving mode direct convolution
-        // These avoid the circular buffer overhead by using a linear sliding approach
-        std::vector<std::vector<float>> m_linear_history_buffers; // Per-channel linear buffers
-        std::vector<size_t> m_history_fill_count;                 // Track how many samples in each buffer
-
         // For FFT overlap-add method (stateful)
         std::vector<std::vector<float>> m_overlap_buffers;    // One per channel
         std::vector<std::complex<float>> m_kernel_fft;        // Precomputed kernel FFT
@@ -224,6 +219,9 @@ namespace dsp::adapters
 
         // High-performance FIR filters for batch convolution (one per channel)
         std::vector<std::unique_ptr<core::FirFilterNeon>> m_batch_fir_filters;
+
+        // High-performance FIR filters for moving/streaming convolution (one per channel)
+        std::vector<std::unique_ptr<core::FirFilterNeon>> m_moving_fir_filters;
 
         // Reusable buffer for moving mode direct convolution (eliminates per-sample allocation)
         mutable std::vector<float> m_moving_temp_buffer;
@@ -297,82 +295,40 @@ namespace dsp::adapters
         /**
          * @brief Direct convolution in moving mode - Ultra high-performance version.
          *
-         * This implementation eliminates ALL circular buffer overhead by using
-         * a linear sliding buffer approach. This is the "naive JS" algorithm
-         * implemented in C++ with SIMD.
+         * Uses FirFilterNeon with O(1) guard-zone circular buffer instead of
+         * the old O(N) memmove approach. Each channel maintains its own stateful
+         * FIR filter for true streaming processing.
          *
-         * Key optimization: Instead of circular buffers with wrapping and copying,
-         * we use a simple linear buffer and shift elements when needed. This allows
-         * the SIMD dot product to operate directly on contiguous memory.
+         * Key optimization: The FirFilterNeon class handles all state management
+         * with O(1) updates and fully vectorized NEON convolution.
          */
         void processMovingDirect(float *buffer, size_t numSamples, int numChannels)
         {
             size_t samplesPerChannel = numSamples / numChannels;
-            size_t kernelSize = m_kernel.size();
 
-            // Initialize linear history buffers if needed
-            if (m_linear_history_buffers.size() != static_cast<size_t>(numChannels))
+            // Initialize FIR filters for each channel (only once)
+            if (m_moving_fir_filters.size() != static_cast<size_t>(numChannels))
             {
-                m_linear_history_buffers.resize(numChannels);
-                m_history_fill_count.resize(numChannels, 0);
-                for (auto &buf : m_linear_history_buffers)
+                m_moving_fir_filters.clear();
+                for (int ch = 0; ch < numChannels; ++ch)
                 {
-                    buf.resize(kernelSize, 0.0f);
+                    m_moving_fir_filters.push_back(
+                        std::make_unique<core::FirFilterNeon>(m_kernel));
                 }
             }
 
-            // Pre-reverse the kernel ONCE (not per channel, not per sample!)
-            std::vector<float> kernelReversed(m_kernel.rbegin(), m_kernel.rend());
-            const float *kernelPtr = kernelReversed.data();
-
-            // Process each channel
+            // Process each channel with stateful FIR filter
+            // For interleaved data, we process per-sample but the FirFilterNeon
+            // uses O(1) circular buffer updates (no memmove!)
             for (int ch = 0; ch < numChannels; ++ch)
             {
-                auto &history = m_linear_history_buffers[ch];
-                size_t &fillCount = m_history_fill_count[ch];
+                auto &fir = m_moving_fir_filters[ch];
 
-                // Process all samples for this channel
+                // Process all samples for this channel (stateful streaming)
                 for (size_t i = 0; i < samplesPerChannel; ++i)
                 {
                     size_t idx = i * numChannels + ch;
-                    float sample = buffer[idx];
-
-                    // Shift the history buffer left by one (oldest sample drops off)
-                    // For very small kernels, manual shifting can be faster than memmove
-                    if (kernelSize <= 16)
-                    {
-                        // Manual unrolled shift for small kernels (avoids memmove overhead)
-                        for (size_t k = 0; k < kernelSize - 1; ++k)
-                        {
-                            history[k] = history[k + 1];
-                        }
-                    }
-                    else
-                    {
-                        // Use optimized memmove for larger kernels
-                        std::memmove(history.data(), history.data() + 1, (kernelSize - 1) * sizeof(float));
-                    }
-
-                    // Add new sample at the end
-                    history[kernelSize - 1] = sample;
-
-                    // Track how many samples we've seen
-                    if (fillCount < kernelSize)
-                    {
-                        fillCount++;
-                    }
-
-                    // Only compute when we have enough history
-                    if (fillCount >= kernelSize)
-                    {
-                        // SIMD dot product directly on the linear buffer (NO COPY!)
-                        float result = simd::dot_product(kernelPtr, history.data(), kernelSize);
-                        buffer[idx] = result;
-                    }
-                    else
-                    {
-                        buffer[idx] = 0.0f;
-                    }
+                    buffer[idx] = fir->processSample(buffer[idx]);
                 }
             }
         }
@@ -430,26 +386,29 @@ namespace dsp::adapters
             for (int ch = 0; ch < numChannels; ++ch)
             {
                 auto &fir = m_batch_fir_filters[ch];
-                auto &output = m_deinterleaved_buffers[ch];
+                auto &channel_buffer = m_deinterleaved_buffers[ch];
 
                 // Reset filter state for batch mode (stateless)
                 fir->reset();
 
-                // Extract channel samples and process in-place
+                // De-interleave: Extract channel samples
                 for (size_t i = 0; i < samplesPerChannel; ++i)
                 {
-                    float input = buffer[i * numChannels + ch];
-                    output[i] = fir->processSample(input);
+                    channel_buffer[i] = buffer[i * numChannels + ch];
                 }
+
+                // Process the ENTIRE de-interleaved batch at once
+                // This uses the 4x tiled processBatchNeon function!
+                fir->processBatch(channel_buffer.data(), samplesPerChannel);
             }
 
             // Step 2: Re-interleave output back to buffer
             for (int ch = 0; ch < numChannels; ++ch)
             {
-                const auto &output = m_deinterleaved_buffers[ch];
+                const auto &channel_buffer = m_deinterleaved_buffers[ch];
                 for (size_t i = 0; i < samplesPerChannel; ++i)
                 {
-                    buffer[i * numChannels + ch] = output[i];
+                    buffer[i * numChannels + ch] = channel_buffer[i];
                 }
             }
 #else
