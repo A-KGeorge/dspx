@@ -213,10 +213,10 @@ namespace dsp
                 throw std::runtime_error("setState() requires stateful mode");
             }
 
-            // Validate size matches expected filter order
-            if (state.size() != m_coefficients.size())
+            // Validate size - must match the power-of-2 buffer size, not coefficient count
+            if (state.size() != m_state.size())
             {
-                throw std::invalid_argument("state size must match number of coefficients");
+                throw std::invalid_argument("state size must match internal buffer size");
             }
             if (stateIndex >= state.size() && !state.empty())
             {

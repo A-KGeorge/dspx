@@ -3,6 +3,7 @@
 #include "../IDspStage.h"
 #include "../utils/SlidingWindowFilter.h"
 #include "../utils/ConvolutionPolicy.h"
+#include "../utils/SimdOps.h"
 #include "../core/FftEngine.h"
 #include <vector>
 #include <string>
@@ -34,6 +35,9 @@ namespace dsp::adapters
          * @param mode Moving (stateful) or Batch (stateless).
          * @param method Auto, Direct, or FFT.
          * @param autoThreshold Kernel size threshold for auto mode (default: 64).
+         *                      Use FFT for kernels > threshold. For moving mode,
+         *                      FFT becomes beneficial at larger sizes (~128+) due to
+         *                      overlap-add overhead. For batch mode, FFT can help at smaller sizes.
          */
         explicit ConvolutionStage(
             const std::vector<float> &kernel,
@@ -44,7 +48,8 @@ namespace dsp::adapters
               m_mode(mode),
               m_method(method),
               m_autoThreshold(autoThreshold),
-              m_is_initialized(false)
+              m_is_initialized(false),
+              m_batch_fft_size(0)
         {
             if (kernel.empty())
             {
@@ -184,14 +189,41 @@ namespace dsp::adapters
         size_t m_autoThreshold;
         bool m_is_initialized;
 
-        // For direct method (stateful)
+        // For direct method (stateful) - per-channel history
         std::vector<utils::SlidingWindowFilter<float, utils::ConvolutionPolicy<float>>> m_filters;
+
+        // High-performance linear buffers for moving mode direct convolution
+        // These avoid the circular buffer overhead by using a linear sliding approach
+        std::vector<std::vector<float>> m_linear_history_buffers; // Per-channel linear buffers
+        std::vector<size_t> m_history_fill_count;                 // Track how many samples in each buffer
 
         // For FFT overlap-add method (stateful)
         std::vector<std::vector<float>> m_overlap_buffers;    // One per channel
         std::vector<std::complex<float>> m_kernel_fft;        // Precomputed kernel FFT
         size_t m_fft_size;                                    // FFT size for overlap-add
         std::unique_ptr<core::FftEngine<float>> m_fft_engine; // Reusable FFT engine
+
+        // Pre-allocated buffers for FFT operations (avoid per-call allocations)
+        std::vector<float> m_fft_input_buffer;
+        std::vector<std::complex<float>> m_fft_freq_buffer;
+        std::vector<float> m_fft_output_buffer;
+
+        // Pre-allocated buffers for batch operations
+        std::vector<float> m_temp_batch_buffer;
+        std::vector<float> m_batch_kernel_padded;
+        std::vector<std::complex<float>> m_batch_kernel_fft;
+        std::vector<float> m_batch_channel_data;
+        std::vector<std::complex<float>> m_batch_signal_fft;
+        std::vector<float> m_batch_result;
+        size_t m_batch_fft_size;
+
+        // De-interleaved buffers for cache-friendly processing
+        std::vector<std::vector<float>> m_deinterleaved_buffers;
+        std::vector<float> m_temp_output_channel;
+        std::vector<float> m_reversed_window; // Reversed window for SIMD convolution
+
+        // Reusable buffer for moving mode direct convolution (eliminates per-sample allocation)
+        mutable std::vector<float> m_moving_temp_buffer;
 
         /**
          * @brief Determine which method to actually use.
@@ -260,73 +292,201 @@ namespace dsp::adapters
         }
 
         /**
-         * @brief Direct convolution in moving mode.
+         * @brief Direct convolution in moving mode - Ultra high-performance version.
+         *
+         * This implementation eliminates ALL circular buffer overhead by using
+         * a linear sliding buffer approach. This is the "naive JS" algorithm
+         * implemented in C++ with SIMD.
+         *
+         * Key optimization: Instead of circular buffers with wrapping and copying,
+         * we use a simple linear buffer and shift elements when needed. This allows
+         * the SIMD dot product to operate directly on contiguous memory.
          */
         void processMovingDirect(float *buffer, size_t numSamples, int numChannels)
         {
-            initializeFilters(numChannels);
-
             size_t samplesPerChannel = numSamples / numChannels;
+            size_t kernelSize = m_kernel.size();
 
+            // Initialize linear history buffers if needed
+            if (m_linear_history_buffers.size() != static_cast<size_t>(numChannels))
+            {
+                m_linear_history_buffers.resize(numChannels);
+                m_history_fill_count.resize(numChannels, 0);
+                for (auto &buf : m_linear_history_buffers)
+                {
+                    buf.resize(kernelSize, 0.0f);
+                }
+            }
+
+            // Pre-reverse the kernel ONCE (not per channel, not per sample!)
+            std::vector<float> kernelReversed(m_kernel.rbegin(), m_kernel.rend());
+            const float *kernelPtr = kernelReversed.data();
+
+            // Process each channel
             for (int ch = 0; ch < numChannels; ++ch)
             {
+                auto &history = m_linear_history_buffers[ch];
+                size_t &fillCount = m_history_fill_count[ch];
+
+                // Process all samples for this channel
                 for (size_t i = 0; i < samplesPerChannel; ++i)
                 {
                     size_t idx = i * numChannels + ch;
                     float sample = buffer[idx];
 
-                    // Add sample to the sliding window
-                    m_filters[ch].addSample(sample);
-
-                    // Now manually compute convolution from the buffer
-                    auto bufferContents = m_filters[ch].getBufferContents();
-
-                    if (bufferContents.size() == m_kernel.size())
+                    // Shift the history buffer left by one (oldest sample drops off)
+                    // For very small kernels, manual shifting can be faster than memmove
+                    if (kernelSize <= 16)
                     {
-                        float result = m_filters[ch].getPolicy().calculate(bufferContents.data(), bufferContents.size());
+                        // Manual unrolled shift for small kernels (avoids memmove overhead)
+                        for (size_t k = 0; k < kernelSize - 1; ++k)
+                        {
+                            history[k] = history[k + 1];
+                        }
+                    }
+                    else
+                    {
+                        // Use optimized memmove for larger kernels
+                        std::memmove(history.data(), history.data() + 1, (kernelSize - 1) * sizeof(float));
+                    }
+
+                    // Add new sample at the end
+                    history[kernelSize - 1] = sample;
+
+                    // Track how many samples we've seen
+                    if (fillCount < kernelSize)
+                    {
+                        fillCount++;
+                    }
+
+                    // Only compute when we have enough history
+                    if (fillCount >= kernelSize)
+                    {
+                        // SIMD dot product directly on the linear buffer (NO COPY!)
+                        float result = simd::dot_product(kernelPtr, history.data(), kernelSize);
                         buffer[idx] = result;
                     }
                     else
                     {
-                        // Not enough samples yet - output zero or the input
                         buffer[idx] = 0.0f;
                     }
                 }
             }
-        } /**
-           * @brief Direct convolution in batch mode.
-           */
+        }
+
+        /**
+         * @brief Direct convolution in batch mode - TRUE "naive" C++ algorithm.
+         *
+         * This is the apples-to-apples comparison with the "naive JS" benchmark.
+         * It's a simple, stateless loop with NO circular buffers, NO window reversing,
+         * and NO per-sample memory copies. Just like the naive JS code, but with
+         * de-interleaving for cache-friendly processing and SIMD for the inner loop.
+         *
+         * For very small kernels (K=8), the simplicity of this algorithm allows the
+         * C++ compiler to optimize it aggressively (loop unrolling, SIMD vectorization).
+         */
         void processBatchDirect(float *buffer, size_t numSamples, int numChannels)
         {
             size_t samplesPerChannel = numSamples / numChannels;
             size_t kernelSize = m_kernel.size();
 
-            // Create temporary output buffer
-            std::vector<float> tempOutput(numSamples, 0.0f);
+            // Resize de-interleaved buffers if channel count changed
+            if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
+            {
+                m_deinterleaved_buffers.resize(numChannels);
+                for (auto &buf : m_deinterleaved_buffers)
+                {
+                    buf.resize(samplesPerChannel);
+                }
+            }
+            else if (!m_deinterleaved_buffers.empty() &&
+                     m_deinterleaved_buffers[0].size() != samplesPerChannel)
+            {
+                for (auto &buf : m_deinterleaved_buffers)
+                {
+                    buf.resize(samplesPerChannel);
+                }
+            }
+
+            // Resize output buffer
+            if (m_temp_output_channel.size() != samplesPerChannel)
+            {
+                m_temp_output_channel.resize(samplesPerChannel);
+            }
+
+            // Resize reversed window buffer for SIMD (only allocate once)
+            if (m_reversed_window.size() != kernelSize)
+            {
+                m_reversed_window.resize(kernelSize);
+            }
+
+            // Step 1: De-interleave input data for cache-friendly processing
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                for (size_t i = 0; i < samplesPerChannel; ++i)
+                {
+                    m_deinterleaved_buffers[ch][i] = buffer[i * numChannels + ch];
+                }
+            }
+
+            // Step 2: Process each channel - optimized batch convolution
+            const float *kernelPtr = m_kernel.data();
 
             for (int ch = 0; ch < numChannels; ++ch)
             {
+                const float *channelInput = m_deinterleaved_buffers[ch].data();
+                float *output = m_temp_output_channel.data();
+
                 // Standard convolution: y[n] = sum(h[k] * x[n-k])
+                // For small K: simple loop (compiler auto-vectorizes)
+                // For large K: use explicit SIMD with window collection
                 for (size_t n = 0; n < samplesPerChannel; ++n)
                 {
                     float sum = 0.0f;
 
-                    for (size_t k = 0; k < kernelSize; ++k)
+                    if (kernelSize <= 16)
                     {
-                        int inputIdx = static_cast<int>(n) - static_cast<int>(k);
-                        if (inputIdx >= 0)
+                        // Small kernels: tight loop, compiler auto-vectorizes
+                        for (size_t k = 0; k < kernelSize; ++k)
                         {
-                            size_t bufferIdx = inputIdx * numChannels + ch;
-                            sum += m_kernel[k] * buffer[bufferIdx];
+                            if (n >= k)
+                            {
+                                sum += kernelPtr[k] * channelInput[n - k];
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Large kernels: collect window and use SIMD dot product
+                        // This avoids the performance cliff from backward indexing
+                        if (n >= kernelSize - 1)
+                        {
+                            // Full window available - collect in forward order for SIMD
+                            for (size_t k = 0; k < kernelSize; ++k)
+                            {
+                                m_reversed_window[k] = channelInput[n - k];
+                            }
+                            sum = simd::dot_product(kernelPtr, m_reversed_window.data(), kernelSize);
+                        }
+                        else
+                        {
+                            // Partial window at the start
+                            for (size_t k = 0; k <= n; ++k)
+                            {
+                                sum += kernelPtr[k] * channelInput[n - k];
+                            }
                         }
                     }
 
-                    tempOutput[n * numChannels + ch] = sum;
+                    output[n] = sum;
+                }
+
+                // Step 3: Re-interleave output back to original buffer
+                for (size_t i = 0; i < samplesPerChannel; ++i)
+                {
+                    buffer[i * numChannels + ch] = output[i];
                 }
             }
-
-            // Copy result back
-            std::copy(tempOutput.begin(), tempOutput.end(), buffer);
         }
 
         /**
@@ -361,6 +521,11 @@ namespace dsp::adapters
                 m_overlap_buffers.clear();
                 m_overlap_buffers.resize(numChannels, std::vector<float>(kernelSize - 1, 0.0f));
 
+                // Pre-allocate FFT working buffers (eliminates per-chunk allocations)
+                m_fft_input_buffer.resize(m_fft_size);
+                m_fft_freq_buffer.resize(halfSize);
+                m_fft_output_buffer.resize(m_fft_size);
+
                 m_is_initialized = true;
             }
         }
@@ -379,60 +544,63 @@ namespace dsp::adapters
             size_t kernelSize = m_kernel.size();
             size_t halfSize = m_fft_size / 2 + 1;
 
+            // Chunk size: process kernelSize samples at a time (FFT size = 2*kernelSize)
+            size_t chunkSize = kernelSize;
+
+            // Use pre-allocated buffers (no allocations in the loop!)
+
             // Process each channel independently
             for (int ch = 0; ch < numChannels; ++ch)
             {
-                // Extract channel data
-                std::vector<float> channelData(samplesPerChannel);
-                for (size_t i = 0; i < samplesPerChannel; ++i)
+                // Process signal in chunks
+                for (size_t pos = 0; pos < samplesPerChannel; pos += chunkSize)
                 {
-                    channelData[i] = buffer[i * numChannels + ch];
-                }
+                    size_t currentChunkSize = std::min(chunkSize, samplesPerChannel - pos);
 
-                // Zero-pad to FFT size
-                std::vector<float> inputPadded(m_fft_size, 0.0f);
-                std::copy(channelData.begin(), channelData.end(), inputPadded.begin());
+                    // Zero-pad to FFT size using pre-allocated buffer
+                    std::fill(m_fft_input_buffer.begin(), m_fft_input_buffer.end(), 0.0f);
+                    for (size_t i = 0; i < currentChunkSize; ++i)
+                    {
+                        m_fft_input_buffer[i] = buffer[(pos + i) * numChannels + ch];
+                    }
 
-                // FFT of input chunk
-                std::vector<std::complex<float>> inputFFT(halfSize);
-                m_fft_engine->rfft(inputPadded.data(), inputFFT.data());
+                    // FFT of input chunk
+                    m_fft_engine->rfft(m_fft_input_buffer.data(), m_fft_freq_buffer.data());
 
-                // Complex multiplication in frequency domain
-                for (size_t i = 0; i < halfSize; ++i)
-                {
-                    inputFFT[i] *= m_kernel_fft[i];
-                }
+                    // Complex multiplication in frequency domain
+                    for (size_t i = 0; i < halfSize; ++i)
+                    {
+                        m_fft_freq_buffer[i] *= m_kernel_fft[i];
+                    }
 
-                // IFFT to get convolution result
-                std::vector<float> convResult(m_fft_size);
-                m_fft_engine->irfft(inputFFT.data(), convResult.data());
+                    // IFFT to get convolution result
+                    m_fft_engine->irfft(m_fft_freq_buffer.data(), m_fft_output_buffer.data());
 
-                // Overlap-add: add the tail from the previous chunk
-                for (size_t i = 0; i < kernelSize - 1 && i < samplesPerChannel; ++i)
-                {
-                    convResult[i] += m_overlap_buffers[ch][i];
-                }
+                    // Overlap-add: add the tail from the previous chunk
+                    for (size_t i = 0; i < kernelSize - 1 && i < currentChunkSize; ++i)
+                    {
+                        m_fft_output_buffer[i] += m_overlap_buffers[ch][i];
+                    }
 
-                // Save the tail for the next chunk
-                std::fill(m_overlap_buffers[ch].begin(), m_overlap_buffers[ch].end(), 0.0f);
-                for (size_t i = 0; i < kernelSize - 1 && (samplesPerChannel + i) < m_fft_size; ++i)
-                {
-                    m_overlap_buffers[ch][i] = convResult[samplesPerChannel + i];
-                }
+                    // Save the tail for the next chunk
+                    std::fill(m_overlap_buffers[ch].begin(), m_overlap_buffers[ch].end(), 0.0f);
+                    for (size_t i = 0; i < kernelSize - 1 && (currentChunkSize + i) < m_fft_size; ++i)
+                    {
+                        m_overlap_buffers[ch][i] = m_fft_output_buffer[currentChunkSize + i];
+                    }
 
-                // Copy result back to interleaved buffer
-                for (size_t i = 0; i < samplesPerChannel; ++i)
-                {
-                    buffer[i * numChannels + ch] = convResult[i];
+                    // Copy result back to interleaved buffer (only valid samples)
+                    for (size_t i = 0; i < currentChunkSize; ++i)
+                    {
+                        buffer[(pos + i) * numChannels + ch] = m_fft_output_buffer[i];
+                    }
                 }
             }
-        }
-
-        /**
-         * @brief FFT convolution in batch mode.
-         *
-         * Uses FFT-based fast convolution: FFT(x) * FFT(h) -> IFFT
-         */
+        } /**
+           * @brief FFT convolution in batch mode.
+           *
+           * Uses FFT-based fast convolution: FFT(x) * FFT(h) -> IFFT
+           */
         void processBatchFFT(float *buffer, size_t numSamples, int numChannels)
         {
             size_t samplesPerChannel = numSamples / numChannels;
@@ -448,46 +616,94 @@ namespace dsp::adapters
                 fftSizePow2 *= 2;
             }
 
-            // Create FFT engine
-            core::FftEngine<float> fftEngine(fftSizePow2);
+            // Resize buffers only if FFT size changed (avoid reallocation on every call)
+            if (m_batch_fft_size != fftSizePow2)
+            {
+                m_batch_fft_size = fftSizePow2;
+                size_t halfSize = fftSizePow2 / 2 + 1;
 
-            // Zero-pad kernel to FFT size
-            std::vector<float> kernelPadded(fftSizePow2, 0.0f);
-            std::copy(m_kernel.begin(), m_kernel.end(), kernelPadded.begin());
+                // Create/resize FFT engine
+                m_fft_engine = std::make_unique<core::FftEngine<float>>(fftSizePow2);
 
-            // Compute FFT of kernel (only once)
-            size_t halfSize = fftSizePow2 / 2 + 1;
-            std::vector<std::complex<float>> kernelFFT(halfSize);
-            fftEngine.rfft(kernelPadded.data(), kernelFFT.data());
+                // Pre-allocate buffers
+                m_batch_kernel_padded.resize(fftSizePow2);
+                m_batch_kernel_fft.resize(halfSize);
+                m_batch_channel_data.resize(fftSizePow2);
+                m_batch_signal_fft.resize(halfSize);
+                m_batch_result.resize(fftSizePow2);
 
-            // Process each channel
+                // Zero-pad kernel and compute FFT (only once per size)
+                std::fill(m_batch_kernel_padded.begin(), m_batch_kernel_padded.end(), 0.0f);
+                std::copy(m_kernel.begin(), m_kernel.end(), m_batch_kernel_padded.begin());
+                m_fft_engine->rfft(m_batch_kernel_padded.data(), m_batch_kernel_fft.data());
+            }
+
+            size_t halfSize = m_batch_fft_size / 2 + 1;
+
+            // Resize de-interleaved buffers if needed
+            if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
+            {
+                m_deinterleaved_buffers.resize(numChannels);
+                for (auto &buf : m_deinterleaved_buffers)
+                {
+                    buf.resize(samplesPerChannel);
+                }
+            }
+            else if (!m_deinterleaved_buffers.empty() &&
+                     m_deinterleaved_buffers[0].size() != samplesPerChannel)
+            {
+                for (auto &buf : m_deinterleaved_buffers)
+                {
+                    buf.resize(samplesPerChannel);
+                }
+            }
+
+            // Resize output buffer
+            if (m_temp_output_channel.size() != samplesPerChannel)
+            {
+                m_temp_output_channel.resize(samplesPerChannel);
+            }
+
+            // Step 1: De-interleave all input data (improves cache locality)
             for (int ch = 0; ch < numChannels; ++ch)
             {
-                // Extract channel data and zero-pad
-                std::vector<float> channelData(fftSizePow2, 0.0f);
                 for (size_t i = 0; i < samplesPerChannel; ++i)
                 {
-                    channelData[i] = buffer[i * numChannels + ch];
+                    m_deinterleaved_buffers[ch][i] = buffer[i * numChannels + ch];
                 }
+            }
+
+            // Step 2: Process each channel on contiguous memory
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                // Zero-pad channel data using pre-allocated buffer
+                std::fill(m_batch_channel_data.begin(), m_batch_channel_data.end(), 0.0f);
+                std::copy(m_deinterleaved_buffers[ch].begin(),
+                          m_deinterleaved_buffers[ch].end(),
+                          m_batch_channel_data.begin());
 
                 // FFT of signal
-                std::vector<std::complex<float>> signalFFT(halfSize);
-                fftEngine.rfft(channelData.data(), signalFFT.data());
+                m_fft_engine->rfft(m_batch_channel_data.data(), m_batch_signal_fft.data());
 
                 // Complex multiplication in frequency domain
                 for (size_t i = 0; i < halfSize; ++i)
                 {
-                    signalFFT[i] *= kernelFFT[i];
+                    m_batch_signal_fft[i] *= m_batch_kernel_fft[i];
                 }
 
                 // IFFT to get convolution result
-                std::vector<float> result(fftSizePow2);
-                fftEngine.irfft(signalFFT.data(), result.data());
+                m_fft_engine->irfft(m_batch_signal_fft.data(), m_batch_result.data());
 
-                // Copy valid portion back (same size as input for 'same' mode)
+                // Store in output buffer
                 for (size_t i = 0; i < samplesPerChannel; ++i)
                 {
-                    buffer[i * numChannels + ch] = result[i];
+                    m_temp_output_channel[i] = m_batch_result[i];
+                }
+
+                // Step 3: Re-interleave output back to original buffer
+                for (size_t i = 0; i < samplesPerChannel; ++i)
+                {
+                    buffer[i * numChannels + ch] = m_temp_output_channel[i];
                 }
             }
         }

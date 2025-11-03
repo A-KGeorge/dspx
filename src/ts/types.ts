@@ -241,6 +241,94 @@ export interface WillisonAmplitudeParams {
 }
 
 /**
+ * Parameters for Linear Regression stage
+ * Performs least squares linear regression over a sliding window
+ * Policy-based design with 4 output modes
+ */
+export interface LinearRegressionParams {
+  /**
+   * Window size in samples
+   * Required parameter for regression calculation
+   */
+  windowSize: number;
+
+  /**
+   * Output mode determining what the stage produces
+   * - 'slope': Outputs the slope (trend) of the regression line
+   * - 'intercept': Outputs the intercept (baseline) value
+   * - 'residuals': Outputs detrended signal (original - fitted values)
+   * - 'predictions': Outputs the fitted values from regression
+   */
+  output: "slope" | "intercept" | "residuals" | "predictions";
+}
+
+/**
+ * Parameters for Adaptive LMS Filter stage
+ *
+ * **IMPORTANT**: This stage REQUIRES exactly 2 channels:
+ * - Channel 0: Primary signal x[n] (the signal to be processed)
+ * - Channel 1: Desired/reference signal d[n] (the target or noise reference)
+ *
+ * The stage outputs the error signal e[n] = d[n] - y[n], which for noise cancellation
+ * represents the cleaned signal with the adaptive filter having removed the correlated noise.
+ *
+ * @example
+ * ```typescript
+ * // Noise cancellation example
+ * const pipeline = createDspPipeline();
+ * pipeline.LmsFilter({ numTaps: 32, learningRate: 0.01 });
+ *
+ * // Create 2-channel interleaved buffer: [x[0], d[0], x[1], d[1], ...]
+ * const interleaved = new Float32Array(2000); // 1000 samples × 2 channels
+ * for (let i = 0; i < 1000; i++) {
+ *   interleaved[i * 2 + 0] = noisySignal[i];      // Channel 0: noisy signal
+ *   interleaved[i * 2 + 1] = noiseReference[i];   // Channel 1: noise reference
+ * }
+ *
+ * const cleaned = await pipeline.process(interleaved, { channels: 2, sampleRate: 8000 });
+ * ```
+ */
+export interface LmsFilterParams {
+  /**
+   * Number of filter taps (filter order)
+   * Higher values allow modeling more complex systems but increase computation
+   * Typical values: 8-128 depending on application
+   */
+  numTaps: number;
+
+  /**
+   * Learning rate (mu) for weight updates
+   * Controls adaptation speed vs stability tradeoff
+   * - Too high: fast adaptation but unstable (may diverge)
+   * - Too low: slow adaptation but stable convergence
+   * Typical range: 0.001 to 0.1
+   * Alias: 'mu' is also accepted
+   */
+  learningRate?: number;
+
+  /**
+   * Alias for learningRate (commonly used in DSP literature)
+   */
+  mu?: number;
+
+  /**
+   * Use Normalized LMS (NLMS) algorithm
+   * NLMS normalizes by input power, providing more stable convergence
+   * with varying signal amplitudes
+   * Default: false (standard LMS)
+   */
+  normalized?: boolean;
+
+  /**
+   * Regularization parameter for leaky LMS
+   * Prevents weight explosion by adding small decay term
+   * Range: [0, 1), typically 0.0001 to 0.01
+   * Default: 0.0 (no regularization)
+   */
+  lambda?: number;
+}
+
+/**
  * Tap callback function for inspecting samples at any point in the pipeline
  * @param samples - Float32Array view of the current samples
  * @param stageName - Name of the pipeline stage

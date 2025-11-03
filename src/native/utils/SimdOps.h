@@ -664,83 +664,102 @@ namespace dsp::simd
 
     /**
      * @brief SIMD-optimized dot product for FIR convolution
+     * Uses double-precision accumulation to minimize rounding errors.
      * result = sum(a[i] * b[i]) for i in [0, size)
      * @param a First array
      * @param b Second array
      * @param size Number of elements
-     * @return Dot product
+     * @return Dot product (accumulated in double precision, returned as double)
      */
-    inline float dot_product(const float *a, const float *b, size_t size)
+    inline double dot_product(const float *a, const float *b, size_t size)
     {
 #if defined(SIMD_AVX2)
         const size_t simd_width = 8;
         const size_t simd_count = size / simd_width;
         const size_t simd_end = simd_count * simd_width;
 
-        __m256 acc = _mm256_setzero_ps();
+        // Use double precision accumulators
+        __m256d acc1 = _mm256_setzero_pd();
+        __m256d acc2 = _mm256_setzero_pd();
 
         for (size_t i = 0; i < simd_end; i += simd_width)
         {
+            // Load and multiply 8 floats
             __m256 va = _mm256_loadu_ps(&a[i]);
             __m256 vb = _mm256_loadu_ps(&b[i]);
             __m256 prod = _mm256_mul_ps(va, vb);
-            acc = _mm256_add_ps(acc, prod);
+
+            // Convert to two groups of 4 doubles for precision
+            __m128 lo = _mm256_castps256_ps128(prod);
+            __m128 hi = _mm256_extractf128_ps(prod, 1);
+
+            __m256d dbl_lo = _mm256_cvtps_pd(lo);
+            __m256d dbl_hi = _mm256_cvtps_pd(hi);
+
+            acc1 = _mm256_add_pd(acc1, dbl_lo);
+            acc2 = _mm256_add_pd(acc2, dbl_hi);
         }
 
-        // Horizontal sum of the accumulator
-        __m128 hi = _mm256_extractf128_ps(acc, 1);
-        __m128 lo = _mm256_castps256_ps128(acc);
-        __m128 sum128 = _mm_add_ps(lo, hi);
+        // Horizontal sum
+        acc1 = _mm256_add_pd(acc1, acc2);
+        __m128d sum_high = _mm256_extractf128_pd(acc1, 1);
+        __m128d sum_low = _mm256_castpd256_pd128(acc1);
+        __m128d sum128 = _mm_add_pd(sum_low, sum_high);
 
-        // Reduce 4 floats to 1
-        sum128 = _mm_hadd_ps(sum128, sum128);
-        sum128 = _mm_hadd_ps(sum128, sum128);
-
-        float result = _mm_cvtss_f32(sum128);
+        double result[2];
+        _mm_storeu_pd(result, sum128);
+        double total = result[0] + result[1];
 
         // Handle remainder
         for (size_t i = simd_end; i < size; ++i)
         {
-            result += a[i] * b[i];
+            total += static_cast<double>(a[i]) * static_cast<double>(b[i]);
         }
 
-        return result;
+        return total;
 
 #elif defined(SIMD_SSE2)
         const size_t simd_width = 4;
         const size_t simd_count = size / simd_width;
         const size_t simd_end = simd_count * simd_width;
 
-        __m128 acc = _mm_setzero_ps();
+        // Use double precision accumulators
+        __m128d acc1 = _mm_setzero_pd();
+        __m128d acc2 = _mm_setzero_pd();
 
         for (size_t i = 0; i < simd_end; i += simd_width)
         {
+            // Load and multiply 4 floats
             __m128 va = _mm_loadu_ps(&a[i]);
             __m128 vb = _mm_loadu_ps(&b[i]);
             __m128 prod = _mm_mul_ps(va, vb);
-            acc = _mm_add_ps(acc, prod);
+
+            // Convert to doubles for precision
+            __m128d dbl_lo = _mm_cvtps_pd(prod);
+            __m128d dbl_hi = _mm_cvtps_pd(_mm_movehl_ps(prod, prod));
+
+            acc1 = _mm_add_pd(acc1, dbl_lo);
+            acc2 = _mm_add_pd(acc2, dbl_hi);
         }
 
-        // Horizontal sum
-        __m128 shuf = _mm_shuffle_ps(acc, acc, _MM_SHUFFLE(2, 3, 0, 1));
-        __m128 sums = _mm_add_ps(acc, shuf);
-        shuf = _mm_movehl_ps(shuf, sums);
-        sums = _mm_add_ss(sums, shuf);
-
-        float result = _mm_cvtss_f32(sums);
+        acc1 = _mm_add_pd(acc1, acc2);
+        double result[2];
+        _mm_storeu_pd(result, acc1);
+        double total = result[0] + result[1];
 
         for (size_t i = simd_end; i < size; ++i)
         {
-            result += a[i] * b[i];
+            total += static_cast<double>(a[i]) * static_cast<double>(b[i]);
         }
 
-        return result;
+        return total;
 
 #elif defined(SIMD_NEON)
         const size_t simd_width = 4;
         const size_t simd_count = size / simd_width;
         const size_t simd_end = simd_count * simd_width;
 
+        // ARM NEON: Use fused multiply-add with float, then accumulate in double
         float32x4_t acc = vdupq_n_f32(0.0f);
 
         for (size_t i = 0; i < simd_end; i += simd_width)
@@ -750,24 +769,34 @@ namespace dsp::simd
             acc = vmlaq_f32(acc, va, vb); // Fused multiply-add
         }
 
-        // Horizontal sum
-        float32x2_t sum2 = vadd_f32(vget_low_f32(acc), vget_high_f32(acc));
-        float result = vget_lane_f32(vpadd_f32(sum2, sum2), 0);
+        // Convert accumulated floats to double for final sum
+        float temp[4];
+        vst1q_f32(temp, acc);
+        double total = static_cast<double>(temp[0]) + static_cast<double>(temp[1]) +
+                       static_cast<double>(temp[2]) + static_cast<double>(temp[3]);
 
         for (size_t i = simd_end; i < size; ++i)
         {
-            result += a[i] * b[i];
+            total += static_cast<double>(a[i]) * static_cast<double>(b[i]);
         }
 
-        return result;
+        return total;
 
 #else
-        float result = 0.0f;
+        // Scalar with Kahan summation for precision
+        double sum = 0.0;
+        double c = 0.0; // Compensation for lost low-order bits
+
         for (size_t i = 0; i < size; ++i)
         {
-            result += a[i] * b[i];
+            double prod = static_cast<double>(a[i]) * static_cast<double>(b[i]);
+            double y = prod - c;
+            double t = sum + y;
+            c = (t - sum) - y;
+            sum = t;
         }
-        return result;
+
+        return sum;
 #endif
     }
 

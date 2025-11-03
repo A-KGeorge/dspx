@@ -14,6 +14,8 @@ import type {
   WaveformLengthParams,
   SlopeSignChangeParams,
   WillisonAmplitudeParams,
+  LinearRegressionParams,
+  LmsFilterParams,
   InterpolateParams,
   DecimateParams,
   ResampleParams,
@@ -771,6 +773,178 @@ class DspProcessor {
 
     this.nativeInstance.addStage("convolution", stageParams);
     this.stages.push(`convolution:${mode}:${method}:${kernel.length}`);
+    return this;
+  }
+
+  /**
+   * Add a Linear Regression stage to the pipeline
+   * Performs least squares linear regression over a sliding window to analyze trends
+   *
+   * @param params - Configuration for the linear regression stage
+   * @param params.windowSize - Window size in samples (must be positive integer)
+   * @param params.output - Output mode: 'slope', 'intercept', 'residuals', or 'predictions'
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Extract trend (slope) from signal
+   * pipeline.LinearRegression({ windowSize: 100, output: 'slope' });
+   *
+   * @example
+   * // Detrend signal (remove linear trend)
+   * pipeline.LinearRegression({ windowSize: 50, output: 'residuals' });
+   *
+   * @example
+   * // Get baseline value (intercept)
+   * pipeline.LinearRegression({ windowSize: 200, output: 'intercept' });
+   *
+   * @example
+   * // Get fitted values from regression
+   * pipeline.LinearRegression({ windowSize: 100, output: 'predictions' });
+   */
+  LinearRegression(params: LinearRegressionParams): this {
+    // Validate window size
+    if (
+      params.windowSize === undefined ||
+      params.windowSize <= 0 ||
+      !Number.isInteger(params.windowSize)
+    ) {
+      throw new TypeError(
+        `LinearRegression: windowSize must be a positive integer, got ${params.windowSize}`
+      );
+    }
+
+    // Validate output mode
+    const validOutputs: Array<LinearRegressionParams["output"]> = [
+      "slope",
+      "intercept",
+      "residuals",
+      "predictions",
+    ];
+    if (!validOutputs.includes(params.output)) {
+      throw new TypeError(
+        `LinearRegression: output must be one of ${validOutputs.join(
+          ", "
+        )}, got '${params.output}'`
+      );
+    }
+
+    // Map output mode to C++ stage name
+    const stageNameMap = {
+      slope: "linearRegressionSlope",
+      intercept: "linearRegressionIntercept",
+      residuals: "linearRegressionResiduals",
+      predictions: "linearRegressionPredictions",
+    };
+
+    const stageName = stageNameMap[params.output];
+    this.nativeInstance.addStage(stageName, { windowSize: params.windowSize });
+    this.stages.push(`linearRegression:${params.output}`);
+    return this;
+  }
+
+  /**
+   * Add an Adaptive LMS (Least Mean Squares) Filter stage for noise cancellation,
+   * echo cancellation, or system identification
+   *
+   * **CRITICAL**: This stage REQUIRES exactly 2 channels in the input buffer:
+   * - Channel 0: Primary signal x[n] (the signal to be processed/cleaned)
+   * - Channel 1: Desired/reference signal d[n] (noise reference or target signal)
+   *
+   * The stage outputs the error signal e[n] = d[n] - y[n] where y[n] is the
+   * adaptive filter's prediction. For noise cancellation, this error represents
+   * the cleaned signal.
+   *
+   * The filter continuously adapts its weights using the LMS algorithm:
+   * ```
+   * y[n] = w^T * x[n]              (filter output)
+   * e[n] = d[n] - y[n]             (error signal)
+   * w[n+1] = w[n] + mu * e[n] * x[n]  (weight update)
+   * ```
+   *
+   * @param params - LMS filter configuration
+   * @param params.numTaps - Number of filter taps (8-128 typical)
+   * @param params.learningRate - Learning rate mu (0.001-0.1), or use params.mu
+   * @param params.normalized - Use NLMS for better stability (default: false)
+   * @param params.lambda - Leaky LMS regularization (default: 0.0)
+   *
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If numTaps is invalid
+   * @throws {RangeError} If learningRate or lambda is out of range
+   *
+   * @example
+   * ```typescript
+   * // Noise cancellation: Remove 60Hz hum from audio
+   * const pipeline = createDspPipeline();
+   * pipeline.LmsFilter({ numTaps: 32, learningRate: 0.01 });
+   *
+   * // Create interleaved 2-channel buffer
+   * const samples = 1000;
+   * const interleaved = new Float32Array(samples * 2);
+   * for (let i = 0; i < samples; i++) {
+   *   interleaved[i * 2 + 0] = noisyAudio[i];     // Channel 0: noisy signal
+   *   interleaved[i * 2 + 1] = noiseReference[i]; // Channel 1: noise reference
+   * }
+   *
+   * const cleaned = await pipeline.process(interleaved, {
+   *   channels: 2,  // MUST be 2!
+   *   sampleRate: 8000
+   * });
+   * ```
+   *
+   * @example
+   * ```typescript
+   * // Echo cancellation: Remove far-end echo from microphone
+   * pipeline.LmsFilter({ numTaps: 128, mu: 0.005, normalized: true });
+   *
+   * const interleaved = new Float32Array(samples * 2);
+   * for (let i = 0; i < samples; i++) {
+   *   interleaved[i * 2 + 0] = farEndSignal[i];  // Channel 0: speaker output
+   *   interleaved[i * 2 + 1] = microphoneIn[i];  // Channel 1: microphone input
+   * }
+   *
+   * const echoFree = await pipeline.process(interleaved, { channels: 2 });
+   * ```
+   */
+  LmsFilter(params: LmsFilterParams): this {
+    // Validate numTaps
+    if (
+      params.numTaps === undefined ||
+      params.numTaps <= 0 ||
+      !Number.isInteger(params.numTaps)
+    ) {
+      throw new TypeError(
+        `LmsFilter: numTaps must be a positive integer, got ${params.numTaps}`
+      );
+    }
+
+    // Learning rate can be specified as either 'learningRate' or 'mu' (alias)
+    const learningRate = params.learningRate ?? params.mu ?? 0.01;
+    if (learningRate <= 0 || learningRate > 1.0) {
+      throw new RangeError(
+        `LmsFilter: learningRate (mu) must be in (0, 1], got ${learningRate}`
+      );
+    }
+
+    // Optional parameters with validation
+    const normalized = params.normalized ?? false;
+    const lambda = params.lambda ?? 0.0;
+
+    if (lambda < 0 || lambda >= 1.0) {
+      throw new RangeError(
+        `LmsFilter: lambda must be in [0, 1), got ${lambda}`
+      );
+    }
+
+    // Add stage to native pipeline
+    this.nativeInstance.addStage("lmsFilter", {
+      numTaps: params.numTaps,
+      learningRate: learningRate,
+      normalized: normalized,
+      lambda: lambda,
+    });
+
+    this.stages.push(`lmsFilter:${params.numTaps}taps`);
     return this;
   }
 

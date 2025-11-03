@@ -17,6 +17,7 @@ A modern DSP library built for Node.js backends processing real-time biosignals,
 - 🎯 **SIMD Acceleration** – AVX2/SSE2/NEON optimizations provide 2-8x speedup on batch operations and rectification
 - 🔧 **TypeScript-First** – Full type safety with excellent IntelliSense
 - 📡 **Redis State Persistence** – Fully implemented state serialization/deserialization including circular buffer contents and running sums
+- 🔥 **Kafka Streaming (Experimental)** – Real-time data ingestion and log streaming via Apache Kafka (testing in progress)
 - ⏱️ **Time-Series Processing** – NEW! Support for irregular timestamps and time-based windows
 - 🔗 **Fluent Pipeline API** – Chain filter operations with method chaining
 - 🎯 **Zero-Copy Processing** – Direct TypedArray manipulation for minimal overhead
@@ -452,6 +453,39 @@ await pipeline.process(chunk2, { sampleRate: 2000, channels: 1 });
 pipeline.clearState();
 ```
 
+### With Kafka Streaming (Experimental)
+
+> ⚠️ **Note:** Kafka integration is experimental and requires additional testing. See the [Contributing](#-contributing) section if you'd like to help!
+
+```typescript
+import { createDspPipeline, createKafkaConsumer } from "dspx";
+
+// Create DSP pipeline
+const pipeline = createDspPipeline();
+pipeline
+  .MovingAverage({ mode: "moving", windowSize: 10 })
+  .Rms({ mode: "moving", windowSize: 5 });
+
+// Consume sensor data from Kafka topic
+const consumer = await createKafkaConsumer({
+  brokers: ["localhost:9092"],
+  groupId: "dsp-processors",
+  topics: ["sensor-data"],
+  onMessage: async ({ value }) => {
+    const samples = new Float32Array(value.data);
+    const output = await pipeline.process(samples, {
+      channels: 1,
+      sampleRate: 44100,
+    });
+    console.log("Processed:", output[0]);
+  },
+});
+
+await consumer.run();
+```
+
+**See [Kafka Integration Guide](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/KAFKA_INTEGRATION.md) for real-time streaming examples.**
+
 ### Multi-Channel Processing
 
 ```typescript
@@ -575,6 +609,102 @@ const result2 = await moving.process(new Float32Array([1, 2, 3, 4, 5]));
 
 - **Batch**: Quality control metrics, batch statistics, data summarization
 - **Moving**: Signal smoothing, noise reduction, trend analysis, low-pass filtering
+
+##### Convolution Filter
+
+```typescript
+// Batch Mode - Process entire buffer with kernel
+pipeline.Convolution({ mode: "batch", kernel: Float32Array });
+
+// Moving Mode - Stateful streaming convolution
+pipeline.Convolution({
+  mode: "moving",
+  kernel: Float32Array,
+  method: "auto" | "direct" | "fft", // auto (default): switches at kernel size 64
+});
+```
+
+Implements high-performance 1D convolution with automatic FFT acceleration for large kernels. Supports arbitrary kernels for filtering, edge detection, feature extraction, and more.
+
+**Modes:**
+
+| Mode       | Description                        | State     | Output                            | Use Case                                 |
+| ---------- | ---------------------------------- | --------- | --------------------------------- | ---------------------------------------- |
+| `"batch"`  | Convolve kernel with entire buffer | Stateless | Full convolution of input         | Offline processing, batch filtering      |
+| `"moving"` | Stateful streaming convolution     | Stateful  | Overlap-add with state continuity | Real-time filtering, streaming workloads |
+
+**Parameters:**
+
+- `mode`: `"batch"` or `"moving"` - determines computation strategy
+- `kernel`: Float32Array - convolution kernel/filter coefficients
+- `method` (optional): `"auto"` (default), `"direct"`, or `"fft"`
+  - `"auto"`: Uses direct SIMD for kernel ≤ 64, FFT for kernel > 64
+  - `"direct"`: Always use direct convolution (SIMD-accelerated)
+  - `"fft"`: Always use FFT-based convolution (overlap-add for moving mode)
+
+**Features:**
+
+- **Automatic FFT acceleration**: Auto-switches at kernel size 64 for optimal performance
+- **SIMD optimization**: AVX2/SSE2 accelerated direct convolution (4-8x throughput)
+- **Zero allocations**: Pre-allocated buffers eliminate per-call overhead
+- **Cache-friendly**: De-interleaved processing for multi-channel signals
+- **Overlap-add**: Efficient chunked processing for moving mode FFT
+- **Per-channel state**: Independent convolution state for each channel
+
+**Performance Characteristics (Moving Mode):**
+
+| Kernel Size | Method Used   | Throughput (samples/sec) | vs Naive JS                             |
+| ----------- | ------------- | ------------------------ | --------------------------------------- |
+| K=8         | Direct (SIMD) | ~19M                     | Naive JS faster (110M) - see note below |
+| K=32        | Direct (SIMD) | ~12M                     | Naive JS faster (36M) - see note below  |
+| K=64        | Direct (SIMD) | ~7M                      | Naive JS faster (18M) - threshold point |
+| K=128       | FFT (overlap) | **82M**                  | **8.5x faster** than naive JS (9.6M)    |
+| K=256       | FFT (overlap) | **77M**                  | **15x faster** than naive JS (5M)       |
+
+**Example:**
+
+```typescript
+// Batch mode: Simple edge detection kernel
+const edgeKernel = new Float32Array([-1, 0, 1]); // Horizontal gradient
+const batch = createDspPipeline().Convolution({
+  mode: "batch",
+  kernel: edgeKernel,
+});
+const edges = await batch.process(signal);
+
+// Moving mode: Gaussian smoothing (auto FFT for K=7)
+const gaussianKernel = new Float32Array([0.06, 0.24, 0.4, 0.24, 0.06]);
+const moving = createDspPipeline().Convolution({
+  mode: "moving",
+  kernel: gaussianKernel,
+  method: "auto", // Uses direct SIMD (K < 64)
+});
+const smoothed = await moving.process(noisySignal);
+
+// Large kernel: Automatic FFT acceleration (K=128)
+const largeKernel = new Float32Array(128).fill(1 / 128); // Moving average K=128
+const fftConv = createDspPipeline().Convolution({
+  mode: "moving",
+  kernel: largeKernel,
+  method: "auto", // Auto-switches to FFT for 9x speedup
+});
+const filtered = await fftConv.process(data);
+```
+
+**Use Cases:**
+
+- **Signal Processing**: Custom FIR filters, bandpass/bandstop filters, matched filtering
+- **Computer Vision**: Edge detection (Sobel, Prewitt), Gaussian blur, sharpening
+- **Feature Extraction**: Wavelet convolution, pattern matching, template detection
+- **Audio Processing**: Impulse response convolution, reverb, echo effects
+- **Time Series**: Smoothing, differentiation, integration kernels
+
+**Mathematical Properties:**
+
+- **Linearity**: Conv(a·x₁ + b·x₂, h) = a·Conv(x₁, h) + b·Conv(x₂, h)
+- **Commutative**: x ⊛ h = h ⊛ x
+- **Associative**: (x ⊛ h₁) ⊛ h₂ = x ⊛ (h₁ ⊛ h₂)
+- **FFT Equivalence**: Time-domain convolution = Frequency-domain multiplication
 
 ##### RMS (Root Mean Square) Filter
 
@@ -1774,6 +1904,29 @@ Interested in collaborating? Open an issue!
 ### Testing
 
 All 441 tests pass after these fixes. Run `npm test` to verify.
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions! Here are areas where help is particularly needed:
+
+### High Priority
+
+- **Kafka Integration Testing** – The Kafka streaming feature is experimental and needs comprehensive integration tests. Help us validate producer/consumer patterns, error handling, and performance under load.
+- **Additional Filters** – Implement new DSP filters (bandpass, highpass, lowpass, etc.) following the existing architecture patterns.
+
+### How to Contribute
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes with tests
+4. Run `npm test` to ensure all tests pass
+5. Commit your changes (`git commit -m 'Add amazing feature'`)
+6. Push to the branch (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
+
+For questions or discussions, please open an issue first!
 
 ---
 

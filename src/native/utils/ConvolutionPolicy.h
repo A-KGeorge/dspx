@@ -14,6 +14,10 @@ namespace dsp::utils
      *
      * This is equivalent to FIR filtering with a user-specified kernel.
      *
+     * Optimization: The kernel is pre-reversed during construction, so the
+     * calculate() method can use a simple forward SIMD dot product without
+     * needing to reverse the window data on every call.
+     *
      * @tparam T The numeric type (float or double).
      */
     template <typename T>
@@ -23,9 +27,10 @@ namespace dsp::utils
         /**
          * @brief Constructs a convolution policy with a given kernel.
          * @param kernel The convolution kernel (filter coefficients).
+         *               Will be reversed internally for efficient calculation.
          */
         explicit ConvolutionPolicy(const std::vector<T> &kernel)
-            : m_kernel(kernel)
+            : m_kernel_reversed(kernel.rbegin(), kernel.rend())
         {
             if (kernel.empty())
             {
@@ -36,9 +41,12 @@ namespace dsp::utils
         /**
          * @brief Compute the convolution for the current window.
          *
-         * This performs a dot product between the kernel and the window data.
-         * The window data is in order [oldest, ..., newest], so we need to reverse it
-         * to match standard convolution: y[n] = h[0]*x[n] + h[1]*x[n-1] + ...
+         * This performs a dot product between the (pre-reversed) kernel and the window data.
+         * The window data is in order [oldest, ..., newest], and the kernel has been
+         * pre-reversed, so we can do a simple forward dot product.
+         *
+         * Standard convolution: y[n] = h[0]*x[n] + h[1]*x[n-1] + ... + h[M-1]*x[n-M+1]
+         * With pre-reversed kernel: y[n] = h_rev[0]*x[n-M+1] + ... + h_rev[M-1]*x[n]
          *
          * @param windowData Pointer to the current window data (oldest to newest).
          * @param windowSize Size of the window (should match kernel size).
@@ -46,35 +54,29 @@ namespace dsp::utils
          */
         T calculate(const T *windowData, size_t windowSize) const
         {
-            if (windowSize != m_kernel.size())
+            if (windowSize != m_kernel_reversed.size())
             {
                 throw std::runtime_error("Window size must match kernel size");
             }
 
-            // Use SIMD-optimized dot product with reversed window
-            // Window is [x[n-M+1], ..., x[n-1], x[n]] (oldest to newest)
-            // Kernel is [h[0], h[1], ..., h[M-1]]
-            // We want: h[0]*x[n] + h[1]*x[n-1] + ... + h[M-1]*x[n-M+1]
-            // So we need to reverse the window or kernel
+            // SIMD-optimized forward dot product (no reversal needed!)
+            // Window: [x[n-M+1], ..., x[n-1], x[n]] (oldest to newest)
+            // Reversed kernel: [h[M-1], ..., h[1], h[0]]
+            // Dot product: h[M-1]*x[n-M+1] + ... + h[1]*x[n-1] + h[0]*x[n]
+            // Which equals: h[0]*x[n] + h[1]*x[n-1] + ... + h[M-1]*x[n-M+1] ✓
 
             if constexpr (std::is_same_v<T, float>)
             {
-                // Reverse the window for standard convolution
-                // Could also reverse the kernel, but reversing the window is more cache-friendly
-                T result = T(0);
-                for (size_t i = 0; i < windowSize; ++i)
-                {
-                    result += m_kernel[i] * windowData[windowSize - 1 - i];
-                }
-                return result;
+                // Use SIMD dot product - no reversing needed!
+                return simd::dot_product(m_kernel_reversed.data(), windowData, windowSize);
             }
             else
             {
-                // Scalar fallback for double with reversed window
+                // Scalar fallback
                 T result = T(0);
                 for (size_t i = 0; i < windowSize; ++i)
                 {
-                    result += m_kernel[i] * windowData[windowSize - 1 - i];
+                    result += m_kernel_reversed[i] * windowData[i];
                 }
                 return result;
             }
@@ -110,16 +112,17 @@ namespace dsp::utils
          */
         size_t getKernelSize() const
         {
-            return m_kernel.size();
+            return m_kernel_reversed.size();
         }
 
         /**
-         * @brief Get the kernel.
-         * @return Reference to the kernel vector.
+         * @brief Get the original kernel (not reversed).
+         * @return Vector containing the original kernel coefficients.
          */
-        const std::vector<T> &getKernel() const
+        std::vector<T> getKernel() const
         {
-            return m_kernel;
+            // Return original kernel (reverse the reversed kernel)
+            return std::vector<T>(m_kernel_reversed.rbegin(), m_kernel_reversed.rend());
         }
 
         /**
@@ -139,7 +142,7 @@ namespace dsp::utils
         void setState(const EmptyState &) {}
 
     private:
-        std::vector<T> m_kernel; // The convolution kernel
+        std::vector<T> m_kernel_reversed; // Pre-reversed kernel for efficient calculation
     };
 
 } // namespace dsp::utils

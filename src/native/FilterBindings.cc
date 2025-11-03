@@ -5,6 +5,7 @@
 #include <napi.h>
 #include "core/FirFilter.h"
 #include "core/IirFilter.h"
+#include "core/DifferentiableFilter.h"
 #include "utils/NapiUtils.h"
 #include <memory>
 
@@ -999,12 +1000,279 @@ namespace dsp
         }
     };
 
+    // ========== Differentiable Filter Bindings ==========
+
+    class DifferentiableFilterWrapper : public Napi::ObjectWrap<DifferentiableFilterWrapper>
+    {
+    public:
+        static inline Napi::FunctionReference constructor;
+
+        static Napi::Object Init(Napi::Env env, Napi::Object exports)
+        {
+            Napi::Function func = DefineClass(env, "DifferentiableFilter", {
+                                                                               InstanceMethod("init", &DifferentiableFilterWrapper::Init_),
+                                                                               InstanceMethod("process", &DifferentiableFilterWrapper::Process),
+                                                                               InstanceMethod("filter", &DifferentiableFilterWrapper::Filter),
+                                                                               InstanceMethod("reset", &DifferentiableFilterWrapper::Reset),
+                                                                               InstanceMethod("getWeights", &DifferentiableFilterWrapper::GetWeights),
+                                                                               InstanceMethod("setWeights", &DifferentiableFilterWrapper::SetWeights),
+                                                                               InstanceMethod("setLearningRate", &DifferentiableFilterWrapper::SetLearningRate),
+                                                                               InstanceMethod("getLearningRate", &DifferentiableFilterWrapper::GetLearningRate),
+                                                                               InstanceMethod("getNumTaps", &DifferentiableFilterWrapper::GetNumTaps),
+                                                                           });
+
+            constructor = Napi::Persistent(func);
+            constructor.SuppressDestruct();
+
+            exports.Set("DifferentiableFilter", func);
+            return exports;
+        }
+
+        DifferentiableFilterWrapper(const Napi::CallbackInfo &info) : Napi::ObjectWrap<DifferentiableFilterWrapper>(info)
+        {
+            Napi::Env env = info.Env();
+
+            if (info.Length() < 1 || !info[0].IsNumber())
+            {
+                Napi::TypeError::New(env, "Expected numTaps (number)").ThrowAsJavaScriptException();
+                return;
+            }
+
+            size_t numTaps = info[0].As<Napi::Number>().Uint32Value();
+
+            float mu = 0.01f;
+            if (info.Length() >= 2 && info[1].IsNumber())
+            {
+                mu = info[1].As<Napi::Number>().FloatValue();
+            }
+
+            float lambda = 0.0f;
+            if (info.Length() >= 3 && info[2].IsNumber())
+            {
+                lambda = info[2].As<Napi::Number>().FloatValue();
+            }
+
+            bool normalized = false;
+            if (info.Length() >= 4 && info[3].IsBoolean())
+            {
+                normalized = info[3].As<Napi::Boolean>().Value();
+            }
+
+            try
+            {
+                m_filter = std::make_unique<core::DifferentiableFilter<float>>(numTaps, mu, lambda, normalized);
+            }
+            catch (const std::exception &e)
+            {
+                Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+            }
+        }
+
+    private:
+        std::unique_ptr<core::DifferentiableFilter<float>> m_filter;
+
+        Napi::Value Init_(const Napi::CallbackInfo &info)
+        {
+            Napi::Env env = info.Env();
+
+            if (info.Length() < 1 || !info[0].IsNumber())
+            {
+                Napi::TypeError::New(env, "Expected numChannels (number)").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+
+            size_t numChannels = info[0].As<Napi::Number>().Uint32Value();
+            m_filter->init(numChannels);
+
+            return env.Undefined();
+        }
+
+        Napi::Value Process(const Napi::CallbackInfo &info)
+        {
+            Napi::Env env = info.Env();
+
+            // Arguments: input, desired, output, error, adapt
+            if (info.Length() < 4)
+            {
+                Napi::TypeError::New(env, "Expected 4-5 arguments: input, desired, output, error, [adapt]").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+
+            if (!info[0].IsTypedArray() || !info[1].IsTypedArray() ||
+                !info[2].IsTypedArray() || !info[3].IsTypedArray())
+            {
+                Napi::TypeError::New(env, "All arrays must be Float32Array").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+
+            auto inputArray = info[0].As<Napi::Float32Array>();
+            auto desiredArray = info[1].As<Napi::Float32Array>();
+            auto outputArray = info[2].As<Napi::Float32Array>();
+            auto errorArray = info[3].As<Napi::Float32Array>();
+
+            bool adapt = true;
+            if (info.Length() >= 5 && info[4].IsBoolean())
+            {
+                adapt = info[4].As<Napi::Boolean>().Value();
+            }
+
+            size_t numSamples = inputArray.ElementLength() / m_filter->getNumChannels();
+
+            try
+            {
+                m_filter->process(
+                    inputArray.Data(),
+                    desiredArray.Data(),
+                    outputArray.Data(),
+                    errorArray.Data(),
+                    numSamples,
+                    adapt);
+            }
+            catch (const std::exception &e)
+            {
+                Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+            }
+
+            return env.Undefined();
+        }
+
+        Napi::Value Filter(const Napi::CallbackInfo &info)
+        {
+            Napi::Env env = info.Env();
+
+            if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray())
+            {
+                Napi::TypeError::New(env, "Expected input and output Float32Arrays").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+
+            auto inputArray = info[0].As<Napi::Float32Array>();
+            auto outputArray = info[1].As<Napi::Float32Array>();
+
+            size_t numSamples = inputArray.ElementLength() / m_filter->getNumChannels();
+
+            try
+            {
+                m_filter->filter(inputArray.Data(), outputArray.Data(), numSamples);
+            }
+            catch (const std::exception &e)
+            {
+                Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+            }
+
+            return env.Undefined();
+        }
+
+        Napi::Value Reset(const Napi::CallbackInfo &info)
+        {
+            m_filter->reset();
+            return info.Env().Undefined();
+        }
+
+        Napi::Value GetWeights(const Napi::CallbackInfo &info)
+        {
+            Napi::Env env = info.Env();
+
+            if (info.Length() < 1 || !info[0].IsNumber())
+            {
+                Napi::TypeError::New(env, "Expected channel (number)").ThrowAsJavaScriptException();
+                return env.Null();
+            }
+
+            size_t channel = info[0].As<Napi::Number>().Uint32Value();
+
+            try
+            {
+                const auto &weights = m_filter->getWeights(channel);
+                Napi::Float32Array result = Napi::Float32Array::New(env, weights.size());
+
+                for (size_t i = 0; i < weights.size(); ++i)
+                {
+                    result[i] = weights[i];
+                }
+
+                return result;
+            }
+            catch (const std::exception &e)
+            {
+                Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+                return env.Null();
+            }
+        }
+
+        Napi::Value SetWeights(const Napi::CallbackInfo &info)
+        {
+            Napi::Env env = info.Env();
+
+            if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsTypedArray())
+            {
+                Napi::TypeError::New(env, "Expected channel (number) and weights (Float32Array)").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+
+            size_t channel = info[0].As<Napi::Number>().Uint32Value();
+            auto weightsArray = info[1].As<Napi::Float32Array>();
+
+            std::vector<float> weights(weightsArray.ElementLength());
+            for (size_t i = 0; i < weights.size(); ++i)
+            {
+                weights[i] = weightsArray[i];
+            }
+
+            try
+            {
+                m_filter->setWeights(channel, weights);
+            }
+            catch (const std::exception &e)
+            {
+                Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+            }
+
+            return env.Undefined();
+        }
+
+        Napi::Value SetLearningRate(const Napi::CallbackInfo &info)
+        {
+            Napi::Env env = info.Env();
+
+            if (info.Length() < 1 || !info[0].IsNumber())
+            {
+                Napi::TypeError::New(env, "Expected mu (number)").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+
+            float mu = info[0].As<Napi::Number>().FloatValue();
+
+            try
+            {
+                m_filter->setLearningRate(mu);
+            }
+            catch (const std::exception &e)
+            {
+                Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+            }
+
+            return env.Undefined();
+        }
+
+        Napi::Value GetLearningRate(const Napi::CallbackInfo &info)
+        {
+            return Napi::Number::New(info.Env(), m_filter->getLearningRate());
+        }
+
+        Napi::Value GetNumTaps(const Napi::CallbackInfo &info)
+        {
+            return Napi::Number::New(info.Env(), m_filter->getNumTaps());
+        }
+    };
+
     // ============================================================================
     // Module initialization
     void InitFilterBindings(Napi::Env env, Napi::Object exports)
     {
         FirFilterWrapper::Init(env, exports);
         IirFilterWrapper::Init(env, exports);
+        DifferentiableFilterWrapper::Init(env, exports);
     }
 
 } // namespace dsp

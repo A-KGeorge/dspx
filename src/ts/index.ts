@@ -13,6 +13,8 @@ export {
   createDatadogHandler,
   createConsoleHandler,
   createMockHandler,
+  createKafkaProducerHandler,
+  createKafkaConsumer,
   Logger,
   JSONFormatter,
   TextFormatter,
@@ -27,6 +29,8 @@ export {
   type LoggerMetrics,
   type SamplingConfig,
   type LoggerOptions,
+  type KafkaProducerConfig,
+  type KafkaConsumerConfig,
 } from "./backends.js";
 export {
   DriftDetector,
@@ -45,6 +49,7 @@ export {
 export {
   FirFilter,
   IirFilter,
+  AdaptiveLMSFilter,
   type FilterType,
   type FilterMode,
   type FilterOptions,
@@ -68,6 +73,7 @@ export {
   EntropyTracker,
 } from "./advanced-dsp.js";
 export { egg, credits } from "./easter-egg.js";
+export { dotProduct, DspUtils } from "./utils.js";
 export type {
   DriftStatistics,
   DriftDetectorOptions,

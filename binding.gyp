@@ -19,6 +19,7 @@
         "src/native/core/IirFilter.cc",
         "src/native/FftBindings.cc",
         "src/native/FilterBindings.cc",
+        "src/native/UtilityBindings.cc",
         "src/native/utils/CircularBufferArray.cc",
         "src/native/utils/CircularBufferVector.cc",
         "src/native/utils/NapiUtils.cc",
@@ -77,13 +78,20 @@
           'xcode_settings': {
             'OTHER_CPLUSPLUSFLAGS+': [ '-msse3', '-mavx', '-mavx2' ]
           }
+        }],
+        # Condition for arm64 architecture (Android, iOS, M1/M2 Macs, Tensor G4, etc.)
+        ['target_arch=="arm64"', {
+          "cflags+": [ "-march=armv8-a+fp+simd" ],  # Enable NEON and FP on ARMv8
+          "cflags_cc+": [ "-march=armv8-a+fp+simd" ],
+          'xcode_settings': {
+            'OTHER_CPLUSPLUSFLAGS+': [ '-march=armv8-a+fp+simd' ]
+          }
+        }],
+        # Condition for 32-bit ARM (older Android devices)
+        ['target_arch=="arm"', {
+          "cflags+": [ "-mfpu=neon", "-mfloat-abi=hard" ],  # 32-bit ARM NEON
+          "cflags_cc+": [ "-mfpu=neon", "-mfloat-abi=hard" ],
         }]
-        # Add NEON flags for arm64 if desired, e.g.:
-        # ['target_arch=="arm64"', {
-        #   "cflags+": ["-mfpu=neon"], # Example flag, check compiler docs
-        #   "cflags_cc+": ["-mfpu=neon"],
-        #   'xcode_settings': { 'OTHER_CPLUSPLUSFLAGS+': ['-mfpu=neon'] }
-        # }]
       ]
     }
   ]

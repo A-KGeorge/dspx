@@ -1070,6 +1070,234 @@ function createFilter(options: FilterOptions): FirFilter | IirFilter {
   throw new Error(`Unsupported filter type: ${type}`);
 }
 
+/**
+ * Adaptive LMS Filter (Least Mean Squares)
+ *
+ * An adaptive FIR filter that learns optimal coefficients in real-time using
+ * the LMS algorithm. Adjusts weights based on error between filtered output
+ * and a desired signal.
+ *
+ * Key Features:
+ * - Adaptive coefficient learning with gradient descent
+ * - SIMD-accelerated filtering and dot product operations
+ * - Configurable learning rate (mu) and regularization (lambda)
+ * - Normalized LMS (NLMS) option for stable convergence
+ * - Per-channel independent adaptation
+ * - Weight get/set for transfer learning
+ *
+ * Use Cases:
+ * - Noise cancellation (adaptive noise filtering)
+ * - Echo cancellation
+ * - Channel equalization
+ * - Predictive filtering
+ * - System identification
+ *
+ * @example
+ * ```ts
+ * // Create adaptive filter with 32 taps
+ * const lms = new AdaptiveLMSFilter(32, {
+ *   mu: 0.01,           // Learning rate
+ *   lambda: 0.001,      // Regularization (leaky LMS)
+ *   normalized: true    // Use NLMS for stable convergence
+ * });
+ *
+ * // Initialize for 1 channel
+ * lms.init(1);
+ *
+ * // Training mode: adapt weights based on error
+ * const input = new Float32Array([...]);     // Input signal x[n]
+ * const desired = new Float32Array([...]);   // Desired signal d[n]
+ * const output = new Float32Array(input.length);
+ * const error = new Float32Array(input.length);
+ *
+ * lms.process(input, desired, output, error, true);
+ *
+ * // Inference mode: filter without adaptation
+ * const filtered = new Float32Array(input.length);
+ * lms.filter(input, filtered);
+ *
+ * // Save/load weights for transfer learning
+ * const weights = lms.getWeights(0);
+ * lms.setWeights(0, weights);
+ * ```
+ */
+export class AdaptiveLMSFilter {
+  private native: any;
+
+  /**
+   * Create a new adaptive LMS filter
+   *
+   * @param numTaps - Number of filter coefficients (filter order)
+   * @param options - Configuration options
+   * @param options.mu - Learning rate / step size (0 < mu <= 1). Default: 0.01
+   *                     Lower = slower convergence but more stable
+   *                     Higher = faster convergence but may oscillate
+   * @param options.lambda - Regularization parameter for leaky LMS (0 <= lambda < 1). Default: 0
+   *                        Prevents weight explosion, improves stability
+   * @param options.normalized - Use Normalized LMS (NLMS). Default: false
+   *                            Normalizes step size by input power for stable convergence
+   *
+   * @throws {Error} If numTaps is 0, mu is out of range, or lambda is out of range
+   */
+  constructor(
+    numTaps: number,
+    options: {
+      mu?: number;
+      lambda?: number;
+      normalized?: boolean;
+    } = {}
+  ) {
+    const { mu = 0.01, lambda = 0.0, normalized = false } = options;
+
+    if (numTaps === 0) {
+      throw new Error("numTaps must be greater than 0");
+    }
+
+    if (mu <= 0 || mu > 1) {
+      throw new Error("Learning rate mu must be in range (0, 1]");
+    }
+
+    if (lambda < 0 || lambda >= 1) {
+      throw new Error("Regularization lambda must be in range [0, 1)");
+    }
+
+    this.native = new DspAddon.DifferentiableFilter(
+      numTaps,
+      mu,
+      lambda,
+      normalized
+    );
+  }
+
+  /**
+   * Initialize the filter for a specific number of channels
+   *
+   * Must be called before processing. Each channel maintains independent state.
+   *
+   * @param numChannels - Number of channels (typically 1 for mono, 2 for stereo)
+   */
+  init(numChannels: number): void {
+    this.native.init(numChannels);
+  }
+
+  /**
+   * Process samples through adaptive filter with weight adaptation
+   *
+   * This is the "training mode" where filter weights are updated based on error.
+   * All arrays must have length = numSamples * numChannels (for multi-channel,
+   * data is interleaved: [ch0_s0, ch1_s0, ch0_s1, ch1_s1, ...])
+   *
+   * Algorithm:
+   *   y[n] = w^T * x[n]              (filtering)
+   *   e[n] = d[n] - y[n]             (error computation)
+   *   w[n+1] = w[n] + mu * e[n] * x[n]  (weight update, if adapt=true)
+   *
+   * @param input - Input signal x[n] (Float32Array)
+   * @param desired - Desired signal d[n] (Float32Array)
+   * @param output - Output signal y[n] (Float32Array, modified in-place)
+   * @param error - Error signal e[n] = d[n] - y[n] (Float32Array, modified in-place)
+   * @param adapt - If true, update weights. If false, only filter. Default: true
+   */
+  process(
+    input: Float32Array,
+    desired: Float32Array,
+    output: Float32Array,
+    error: Float32Array,
+    adapt: boolean = true
+  ): void {
+    this.native.process(input, desired, output, error, adapt);
+  }
+
+  /**
+   * Filter signal without adapting weights (inference mode)
+   *
+   * Uses current filter weights to filter the input signal.
+   * No weight updates occur. Useful after training is complete.
+   *
+   * @param input - Input signal (Float32Array)
+   * @param output - Filtered output (Float32Array, modified in-place)
+   */
+  filter(input: Float32Array, output: Float32Array): void {
+    this.native.filter(input, output);
+  }
+
+  /**
+   * Reset filter state to initial conditions
+   *
+   * - Clears all filter weights (sets to 0)
+   * - Clears input buffer history
+   * - Resets input power estimate (for NLMS)
+   */
+  reset(): void {
+    this.native.reset();
+  }
+
+  /**
+   * Get current filter weights for a specific channel
+   *
+   * Useful for:
+   * - Inspecting learned filter response
+   * - Transfer learning (save/restore weights)
+   * - Debugging convergence
+   *
+   * @param channel - Channel index (0-based)
+   * @returns Float32Array of filter coefficients (length = numTaps)
+   * @throws {Error} If channel index is out of range
+   */
+  getWeights(channel: number): Float32Array {
+    return this.native.getWeights(channel);
+  }
+
+  /**
+   * Set filter weights for a specific channel
+   *
+   * Useful for:
+   * - Transfer learning (initialize with pre-trained weights)
+   * - Manual coefficient design
+   * - Restoring saved state
+   *
+   * @param channel - Channel index (0-based)
+   * @param weights - New filter coefficients (Float32Array, length must equal numTaps)
+   * @throws {Error} If channel index is out of range or weights.length != numTaps
+   */
+  setWeights(channel: number, weights: Float32Array): void {
+    this.native.setWeights(channel, weights);
+  }
+
+  /**
+   * Update learning rate (mu) during operation
+   *
+   * Can be used to implement:
+   * - Annealing schedules (decrease mu over time)
+   * - Adaptive step size algorithms
+   * - Two-phase training (fast convergence → fine-tuning)
+   *
+   * @param mu - New learning rate (0 < mu <= 1)
+   * @throws {Error} If mu is out of range
+   */
+  setLearningRate(mu: number): void {
+    this.native.setLearningRate(mu);
+  }
+
+  /**
+   * Get current learning rate
+   *
+   * @returns Current mu value
+   */
+  getLearningRate(): number {
+    return this.native.getLearningRate();
+  }
+
+  /**
+   * Get filter order (number of taps/coefficients)
+   *
+   * @returns Number of filter taps
+   */
+  getNumTaps(): number {
+    return this.native.getNumTaps();
+  }
+}
+
 // ============================================================
 // Exports
 // ============================================================

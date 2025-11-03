@@ -47,6 +47,17 @@ namespace dsp::utils
         std::vector<std::pair<double, T>> toVectorWithTimestamps() const;
         void fromVectorWithTimestamps(const std::vector<std::pair<double, T>> &data);
 
+        /**
+         * @brief Copy buffer contents to a destination array (zero-allocation).
+         *
+         * Copies the buffer contents in chronological order (oldest to newest)
+         * directly to the provided destination pointer. This is more efficient
+         * than toVector() when you already have allocated storage.
+         *
+         * @param dest Destination array (must have space for at least getCount() elements)
+         */
+        void copyTo(T *dest) const;
+
         // destructor (defaulted - unique_ptr handles cleanup automatically)
         ~CircularBufferArray() = default;
 

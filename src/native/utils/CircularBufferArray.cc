@@ -136,6 +136,23 @@ std::vector<T> CircularBufferArray<T>::toVector() const
 }
 
 // -----------------------------------------------------------------------------
+// Method: copyTo
+// Copies buffer contents directly to a destination array (zero-allocation)
+// @ param dest - Destination pointer (must have space for at least count elements)
+// @ return void
+// -----------------------------------------------------------------------------
+template <typename T>
+void CircularBufferArray<T>::copyTo(T *dest) const
+{
+    // Copy in chronological order (oldest to newest)
+    for (size_t i = 0; i < this->count; ++i)
+    {
+        size_t index = (this->tail + i) % this->capacity;
+        dest[i] = this->buffer[index];
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Method: fromVector
 // Imports buffer contents from a vector, maintaining order
 // @ param data - The vector containing the data to import

@@ -13,6 +13,8 @@
 #include "adapters/DecimatorStage.h"         // Decimator (downsample)
 #include "adapters/ResamplerStage.h"         // Resampler (rational rate conversion)
 #include "adapters/ConvolutionStage.h"       // Convolution stage
+#include "adapters/LinearRegressionStage.h"  // Linear Regression stage
+#include "adapters/LmsStage.h"               // LMS Adaptive Filter stage
 
 namespace dsp
 {
@@ -425,6 +427,83 @@ namespace dsp
             }
 
             return std::make_unique<dsp::adapters::ConvolutionStage>(kernel, mode, method, autoThreshold);
+        };
+
+        // Factory for Linear Regression stage (slope output)
+        m_stageFactories["linearRegressionSlope"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("windowSize"))
+            {
+                throw std::invalid_argument("LinearRegressionSlope: 'windowSize' is required");
+            }
+            size_t windowSize = params.Get("windowSize").As<Napi::Number>().Uint32Value();
+            return std::make_unique<dsp::adapters::LinearRegressionSlope>(windowSize);
+        };
+
+        // Factory for Linear Regression stage (intercept output)
+        m_stageFactories["linearRegressionIntercept"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("windowSize"))
+            {
+                throw std::invalid_argument("LinearRegressionIntercept: 'windowSize' is required");
+            }
+            size_t windowSize = params.Get("windowSize").As<Napi::Number>().Uint32Value();
+            return std::make_unique<dsp::adapters::LinearRegressionIntercept>(windowSize);
+        };
+
+        // Factory for Linear Regression stage (residuals output)
+        m_stageFactories["linearRegressionResiduals"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("windowSize"))
+            {
+                throw std::invalid_argument("LinearRegressionResiduals: 'windowSize' is required");
+            }
+            size_t windowSize = params.Get("windowSize").As<Napi::Number>().Uint32Value();
+            return std::make_unique<dsp::adapters::LinearRegressionResiduals>(windowSize);
+        };
+
+        // Factory for Linear Regression stage (predictions output)
+        m_stageFactories["linearRegressionPredictions"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("windowSize"))
+            {
+                throw std::invalid_argument("LinearRegressionPredictions: 'windowSize' is required");
+            }
+            size_t windowSize = params.Get("windowSize").As<Napi::Number>().Uint32Value();
+            return std::make_unique<dsp::adapters::LinearRegressionPredictions>(windowSize);
+        };
+
+        // Factory for LMS Adaptive Filter stage
+        m_stageFactories["lmsFilter"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("numTaps"))
+            {
+                throw std::invalid_argument("LmsFilter: 'numTaps' is required");
+            }
+            size_t numTaps = params.Get("numTaps").As<Napi::Number>().Uint32Value();
+
+            // Optional parameters with defaults
+            float learningRate = 0.01f; // Default mu
+            if (params.Has("learningRate") || params.Has("mu"))
+            {
+                learningRate = params.Has("learningRate")
+                                   ? params.Get("learningRate").As<Napi::Number>().FloatValue()
+                                   : params.Get("mu").As<Napi::Number>().FloatValue();
+            }
+
+            bool normalized = false;
+            if (params.Has("normalized"))
+            {
+                normalized = params.Get("normalized").As<Napi::Boolean>().Value();
+            }
+
+            float lambda = 0.0f;
+            if (params.Has("lambda"))
+            {
+                lambda = params.Get("lambda").As<Napi::Number>().FloatValue();
+            }
+
+            return std::make_unique<dsp::LmsStage>(numTaps, learningRate, normalized, lambda);
         };
     }
 
@@ -977,6 +1056,10 @@ namespace dsp
 namespace dsp
 {
     void InitFftBindings(Napi::Env env, Napi::Object exports);
+    namespace bindings
+    {
+        Napi::Object InitUtilityBindings(Napi::Env env, Napi::Object exports);
+    }
 }
 
 // This function is called by Node.js when the addon is loaded
@@ -990,6 +1073,9 @@ Napi::Object InitAll(Napi::Env env, Napi::Object exports)
 
     // Initialize FIR/IIR filter bindings
     dsp::InitFilterBindings(env, exports);
+
+    // Initialize utility functions (dot product, etc.)
+    dsp::bindings::InitUtilityBindings(env, exports);
 
     return exports;
 }

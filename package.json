@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "test": "node scripts/test.js",
+    "test:clean": "node -e \"require('fs').rmSync('node_modules/.cache', {recursive: true, force: true})\" && npm test",
     "build:ts": "tsc",
     "build:native": "node-gyp rebuild",
     "build": "npm run build:native && npm run build:ts",
@@ -51,6 +52,7 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^24.9.1",
     "jest": "^30.2.0",
+    "kafkajs": "^2.2.4",
     "prebuildify": "^6.0.1",
     "redis": "^5.9.0",
     "ts-jest": "^29.4.5",

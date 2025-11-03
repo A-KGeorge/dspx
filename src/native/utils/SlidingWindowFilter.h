@@ -65,13 +65,11 @@ namespace dsp::utils
          * @param timestamp The timestamp in milliseconds.
          * @return T The computed result from the policy.
          */
-        T addSampleWithTimestamp(T newValue, double timestamp);
-
-        /**
-         * @brief Clears all samples from the filter.
-         *
-         * Resets both the circular buffer and the policy state.
-         */
+        T addSampleWithTimestamp(T newValue, double timestamp); /**
+                                                                 * @brief Clears all samples from the filter.
+                                                                 *
+                                                                 * Resets both the circular buffer and the policy state.
+                                                                 */
         void clear();
 
         /**
@@ -105,15 +103,23 @@ namespace dsp::utils
         std::vector<T> getBufferContents() const;
 
         /**
+         * @brief Copy buffer contents directly to a destination (zero-allocation).
+         * This is a lower-level interface for performance-critical code.
+         * @param dest Destination array (must have space for at least getCount() elements)
+         */
+        void copyBufferTo(T *dest) const
+        {
+            m_buffer.copyTo(dest);
+        }
+
+        /**
          * @brief Restores the buffer contents.
          * @param bufferData The samples to restore to the buffer.
          */
-        void setBufferContents(const std::vector<T> &bufferData);
-
-        /**
-         * @brief Access to the policy for state serialization.
-         * @return Policy& Reference to the internal policy object.
-         */
+        void setBufferContents(const std::vector<T> &bufferData); /**
+                                                                   * @brief Access to the policy for state serialization.
+                                                                   * @return Policy& Reference to the internal policy object.
+                                                                   */
         Policy &getPolicy();
 
         /**
