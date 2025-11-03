@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.12
+
+### Patch Changes
+
+- [`e72da53`](https://github.com/A-KGeorge/dspx/commit/e72da538a230fc9f2c05806b3d55a94401896f5e) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - optimized neon
+
 ## 0.2.0-alpha.11
 
 ### Minor Changes
