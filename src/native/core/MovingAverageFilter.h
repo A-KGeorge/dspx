@@ -71,6 +71,27 @@ namespace dsp::core
         T addSample(T newValue) { return m_filter.addSample(newValue); }
 
         /**
+         * @brief Process array of samples in batch (optimized for throughput).
+         *
+         * This is significantly faster than calling addSample() in a loop
+         * for small-to-medium input sizes, as it:
+         * 1. Avoids per-call overhead (JS→Native boundary crossing)
+         * 2. Enables better CPU cache utilization
+         * 3. Allows compiler to vectorize the loop
+         *
+         * @param input Input array of samples
+         * @param output Output array (same size as input)
+         * @param length Number of samples to process
+         */
+        void processArray(const T *input, T *output, size_t length)
+        {
+            for (size_t i = 0; i < length; ++i)
+            {
+                output[i] = addSample(input[i]);
+            }
+        }
+
+        /**
          * @brief Adds a new sample with timestamp (time-aware mode only).
          * @param newValue The new sample value to add.
          * @param timestamp The timestamp in milliseconds.

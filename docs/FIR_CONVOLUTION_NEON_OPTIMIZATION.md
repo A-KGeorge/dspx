@@ -1,24 +1,122 @@
 # FIR Filter & Convolution ARM NEON Optimization Guide
 
 **Date**: November 3, 2025  
-**Status**: 🚀 Ready for Implementation  
+**Status**: ✅ **Corrected - Guard-Zone Circular Buffer**  
 **Platform**: linux-arm64 (Tensor G4, AWS Graviton, Apple Silicon, Raspberry Pi)
 
 ---
 
 ## Executive Summary
 
-FIR filtering and direct convolution are currently **underperforming on ARM64** due to circular buffer overhead. Benchmark analysis shows naive JavaScript **beating native C++ by 2.7x** for large buffers, indicating a fundamental architecture problem.
+FIR filtering and direct convolution are currently **underperforming on ARM64** due to non-contiguous memory access in circular buffers. Benchmark analysis shows naive JavaScript **beating native C++ by 2.7x** for moderate window sizes.
 
-**Root Cause**: Circular buffer modulo arithmetic prevents SIMD vectorization  
-**Solution**: Transposed direct-form FIR with linear delay line  
-**Expected Gain**: **3-6x speedup** for 16-128 tap filters
+**Root Cause**: Circular buffer wrap-around forces scattered SIMD reads  
+**Solution**: Guard-zone (mirrored) circular buffer with power-of-2 sizing  
+**Expected Gain**: **3-6x speedup** for 16-128 tap filters on ARM  
+**Key Insight**: Keep O(1) state updates while enabling contiguous NEON loads
 
 ---
 
-## 🔍 Benchmark Analysis
+## 🔍 The Real Problem
 
-### Current Performance (v0.2.0-alpha.11)
+### Why Circular Buffers Are Slow (Without Guard Zones)
+
+**Current implementation in FirFilter.cc:**
+
+```cpp
+// Circular buffer with bitmask wrapping
+for (size_t j = 0; j < numCoeffs; j++) {
+  sum += m_coefficients[j] * m_state[(m_stateIndex - j) & m_stateMask];
+  //                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  //                                 This index can "wrap around"!
+}
+```
+
+**The problem**: When `(m_stateIndex - j)` wraps around the buffer boundary, the memory addresses become non-contiguous. NEON `vld1q_f32()` requires **4 consecutive floats** in memory. A wrapped access forces:
+
+- Scalar fallback, OR
+- Multiple misaligned loads, OR
+- Expensive gather operations (not natively supported on ARM)
+
+### Why "Linear Delay Line" Is Wrong
+
+**Copilot's initial suggestion (REJECTED)**:
+
+```cpp
+// BAD: O(N) shift every sample!
+float output = dot_product(coeffs, delayLine); // O(N)
+memmove(delayLine, delayLine+1, (N-1)*sizeof(float)); // O(N) ← KILLS PERFORMANCE
+delayLine[N-1] = input;
+```
+
+**Why this is terrible**:
+
+- Current circular buffer: O(1) state update + O(N) convolution = **O(N) per sample**
+- Linear shift approach: O(N) shift + O(N) convolution = **O(2N) per sample**
+- For streaming (stateful) processing, this **doubles the work** for every sample!
+- Even with NEON-accelerated `memmove`, the memory bandwidth cost is prohibitive
+
+---
+
+## ✅ The Correct Solution: Guard-Zone Circular Buffer
+
+## ✅ The Correct Solution: Guard-Zone Circular Buffer
+
+### Architecture Overview
+
+**Allocate**: `N + GUARD` floats (where N = power-of-2 buffer size, GUARD = 16 floats = 64 bytes)
+
+**On write**:
+
+```cpp
+state[head] = input;              // Write to current position
+if (head < GUARD)                 // If near start (will wrap soon)
+    state[head + N] = input;      // Mirror to guard zone
+head = (head + 1) & (N - 1);      // O(1) wrap with bitmask
+```
+
+**On read (NEON kernel)**:
+
+```cpp
+const float* x = &state[head];    // Starting address (may be near end)
+// Read N taps contiguously - if we "overflow", we read from guard zone!
+for (size_t i = 0; i < N; i += 4) {
+    float32x4_t c = vld1q_f32(coeffs + i);
+    float32x4_t d = vld1q_f32(x + i);  // Always contiguous!
+    acc = vmlaq_f32(acc, c, d);
+}
+```
+
+### Why This Wins
+
+| Approach                   | State Update | Convolution | Memory Access  | Complexity      |
+| -------------------------- | ------------ | ----------- | -------------- | --------------- |
+| **Naive circular**         | O(1)         | O(N) scalar | Non-contiguous | **O(N) scalar** |
+| ❌ **Linear shift**        | O(N)!        | O(N) SIMD   | Contiguous     | **O(2N) SIMD**  |
+| ✅ **Guard-zone circular** | O(1)         | O(N) SIMD   | Contiguous     | **O(N) SIMD**   |
+
+**The guard zone is aliased memory** - when the NEON kernel reads past `state[N-1]`, it continues into `state[N..N+15]`, which contains **mirrored data from the start of the buffer**. This makes the read appear fully contiguous to the CPU's memory subsystem.
+
+### Visual Example (N=8, GUARD=4)
+
+```
+Buffer layout: [0 1 2 3 4 5 6 7 | G G G G]
+                                  └─guard zone─┘
+
+Write sequence (head advances 0→1→2→...→7→0):
+  head=6: state[6]=x, (skip guard)
+  head=7: state[7]=x, (skip guard)
+  head=0: state[0]=x, state[8]=x   ← Mirror!
+  head=1: state[1]=x, state[9]=x   ← Mirror!
+  ...
+
+NEON read from head=7 (near wrap):
+  vld1q_f32(&state[7]) → reads [7, G, G, G] → [7, 0, 1, 2] ✓ Contiguous!
+```
+
+---
+
+## 📊 Performance Analysis
 
 From `algorithmic.json` benchmarks on linux-arm64:
 

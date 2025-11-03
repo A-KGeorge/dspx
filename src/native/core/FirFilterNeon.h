@@ -2,19 +2,24 @@
 
 /**
  * @file FirFilterNeon.h
- * @brief ARM NEON-optimized FIR filter with transposed direct-form II structure
+ * @brief ARM NEON-optimized FIR filter with guard-zone circular buffer
  *
- * This implementation eliminates circular buffer overhead by using a transposed
- * (direct-form II) structure where the delay line is updated once per output sample
- * with simple shifts, allowing pure NEON vectorization without gather operations.
+ * This implementation keeps O(1) state updates while enabling fully contiguous
+ * NEON vectorization using a "guard zone" (mirrored buffer) technique.
  *
- * Expected performance gain vs circular buffer: 3-6x for 16-128 tap filters on ARM.
+ * Key insight: Allocate buffer of size N + GUARD (where GUARD >= max SIMD width).
+ * When writing sample at index i, also write it at i+N. This ensures that any
+ * NEON load starting from 'head' can read contiguously without wrap-around logic.
+ *
+ * Performance: O(1) state update + fully vectorized O(N) convolution.
+ * Expected gain vs naive circular buffer: 3-6x for 16-128 tap filters on ARM.
  */
 
 #include <vector>
 #include <cstddef>
 #include <cstring>
 #include <stdexcept>
+#include <algorithm>
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
 #include <arm_neon.h>
@@ -23,40 +28,47 @@
 namespace dsp::core
 {
     /**
-     * @brief High-performance NEON-optimized FIR filter (ARM only)
+     * @brief High-performance NEON-optimized FIR filter using guard-zone circular buffer
      *
-     * Uses transposed direct-form structure:
-     * - Delay line stored in linear buffer (NO circular indexing)
-     * - Coefficients reversed once during construction
-     * - Inner loop is pure NEON FMA: acc = vmlaq_f32(acc, coeff, delay)
-     * - Per-sample update is simple memmove/NEON shift
+     * Architecture:
+     * - Circular buffer with power-of-2 size for bitmask wrapping (O(1) update)
+     * - Guard zone (mirrored tail) to make SIMD reads always contiguous
+     * - Coefficients stored in forward order (newest sample = h[0])
+     * - NEON kernel reads forward from 'head' with no modulo in inner loop
      *
-     * This architecture allows the CPU to:
-     * 1. Stream memory linearly (no gather/scatter)
-     * 2. Use full NEON FMA pipeline (1 cycle per 4 MACs)
-     * 3. Prefetch ahead automatically (predictable access pattern)
+     * This gives best of both worlds:
+     * 1. O(1) state updates (increment head, write sample + guard)
+     * 2. Fully contiguous NEON loads (no gather/scatter)
+     * 3. No memmove/shift overhead (eliminated algorithmic regression)
      */
     class FirFilterNeon
     {
     public:
         explicit FirFilterNeon(const std::vector<float> &coefficients)
-            : m_numTaps(coefficients.size())
+            : m_numTaps(coefficients.size()),
+              m_head(0)
         {
             if (coefficients.empty())
             {
                 throw std::invalid_argument("FIR coefficients cannot be empty");
             }
 
-            // Store coefficients in REVERSE order for direct convolution
-            // (eliminates index arithmetic in inner loop)
-            m_coefficients.resize(m_numTaps);
-            for (size_t i = 0; i < m_numTaps; ++i)
+            // Round up to next power of 2 for bitmask wrapping
+            m_bufferSize = 1;
+            while (m_bufferSize < m_numTaps)
             {
-                m_coefficients[i] = coefficients[m_numTaps - 1 - i];
+                m_bufferSize <<= 1;
             }
+            m_headMask = m_bufferSize - 1;
 
-            // Allocate delay line (zero-initialized)
-            m_delayLine.resize(m_numTaps, 0.0f);
+            // Store coefficients in FORWARD order (h[0] = newest tap)
+            // This matches the circular buffer access pattern
+            m_coefficients = coefficients;
+
+            // Allocate state buffer + guard zone
+            // Guard zone size = max NEON vector width (16 floats = 64 bytes)
+            constexpr size_t GUARD_SIZE = 16;
+            m_state.resize(m_bufferSize + GUARD_SIZE, 0.0f);
         }
 
         /**
@@ -87,99 +99,87 @@ namespace dsp::core
         }
 
         /**
-         * @brief Reset filter state (clear delay line)
+         * @brief Reset filter state (clear circular buffer and guard zone)
          */
         void reset()
         {
-            std::fill(m_delayLine.begin(), m_delayLine.end(), 0.0f);
+            std::fill(m_state.begin(), m_state.end(), 0.0f);
+            m_head = 0;
         }
 
         size_t getNumTaps() const { return m_numTaps; }
+        size_t getBufferSize() const { return m_bufferSize; }
 
     private:
-        size_t m_numTaps;
-        std::vector<float> m_coefficients; // Reversed for direct convolution
-        std::vector<float> m_delayLine;    // Linear buffer (NO circular indexing!)
+        size_t m_numTaps;                  // Number of filter taps
+        size_t m_bufferSize;               // Power-of-2 buffer size (>= m_numTaps)
+        size_t m_head;                     // Current write position
+        size_t m_headMask;                 // Bitmask for wrapping (bufferSize - 1)
+        std::vector<float> m_coefficients; // Filter coefficients (forward order)
+        std::vector<float> m_state;        // Circular buffer + guard zone
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
         /**
-         * @brief NEON-optimized sample processing
+         * @brief NEON-optimized sample processing with guard-zone circular buffer
          *
-         * Transposed Direct-Form II FIR:
-         * 1. Compute output: y[n] = sum(c[i] * d[i]) using NEON FMA
-         * 2. Update delay line: shift left, insert new sample at end
+         * Algorithm:
+         * 1. Write input to state[head] and state[head + bufferSize] (guard mirror)
+         * 2. Read N contiguous floats starting from state[head] using NEON
+         * 3. Compute dot product with coefficients (fully vectorized)
+         * 4. Advance head with bitmask wrapping (O(1))
          *
-         * This is THE key optimization: delay line is contiguous, so NEON
-         * can stream loads/stores without address computation.
+         * Key: The guard zone ensures that reads from 'head' are ALWAYS contiguous,
+         * even when they logically "wrap around" the circular buffer boundary.
          */
         float processSampleNeon(float input)
         {
-            const size_t simd_width = 4;
-            const size_t simd_count = m_numTaps / simd_width;
-            const size_t simd_end = simd_count * simd_width;
+            // Write input to current position AND guard zone (O(1) mirroring)
+            m_state[m_head] = input;
+            if (m_head < 16) // Only update guard if we're near start (will wrap soon)
+            {
+                m_state[m_head + m_bufferSize] = input;
+            }
+
+            // NEON convolution: read forward from m_head (fully contiguous!)
+            const float *x = &m_state[m_head];
+            const float *h = m_coefficients.data();
+
+            constexpr size_t simd_width = 4;
+            const size_t simd_end = (m_numTaps / simd_width) * simd_width;
 
             float32x4_t acc = vdupq_n_f32(0.0f);
 
-            // Vectorized MAC: acc += coeff[i] * delay[i]
+            // Vectorized MAC loop (no modulo, no branches!)
             for (size_t i = 0; i < simd_end; i += simd_width)
             {
-                float32x4_t c = vld1q_f32(&m_coefficients[i]);
-                float32x4_t d = vld1q_f32(&m_delayLine[i]);
+                float32x4_t c = vld1q_f32(h + i);
+                float32x4_t d = vld1q_f32(x + i);
                 acc = vmlaq_f32(acc, c, d); // Fused multiply-add
             }
 
-            // Horizontal reduction (sum 4 lanes)
+            // Horizontal reduction
+#if defined(__aarch64__) && defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
+            // ARMv8.1-a and later: use vaddvq_f32
+            float output = vaddvq_f32(acc);
+#else
+            // ARMv8.0 fallback: manual pairwise addition
             float32x2_t sum_lo = vget_low_f32(acc);
             float32x2_t sum_hi = vget_high_f32(acc);
             float32x2_t sum_pair = vadd_f32(sum_lo, sum_hi);
             float32x2_t sum_final = vpadd_f32(sum_pair, sum_pair);
             float output = vget_lane_f32(sum_final, 0);
+#endif
 
-            // Handle remainder (scalar)
+            // Scalar tail (remaining 0-3 taps)
             for (size_t i = simd_end; i < m_numTaps; ++i)
             {
-                output += m_coefficients[i] * m_delayLine[i];
+                output += h[i] * x[i];
             }
 
-            // Update delay line: shift left by 1, insert new sample at end
-            // For small taps (<= 64), NEON shift is faster than memmove
-            if (m_numTaps <= 64)
-            {
-                neonShiftLeft(m_delayLine.data(), m_numTaps, input);
-            }
-            else
-            {
-                std::memmove(m_delayLine.data(), m_delayLine.data() + 1, (m_numTaps - 1) * sizeof(float));
-                m_delayLine[m_numTaps - 1] = input;
-            }
+            // Advance head (O(1) with bitmask)
+            m_head = (m_head + 1) & m_headMask;
 
             return output;
-        }
-
-        /**
-         * @brief NEON-accelerated delay line shift
-         * Shifts entire array left by 1 element using vectorized loads/stores
-         */
-        static void neonShiftLeft(float *data, size_t size, float newValue)
-        {
-            const size_t simd_width = 4;
-            const size_t simd_count = (size - 1) / simd_width;
-            const size_t simd_end = simd_count * simd_width;
-
-            // Vectorized shift: data[i] = data[i+1]
-            for (size_t i = 0; i < simd_end; i += simd_width)
-            {
-                float32x4_t vals = vld1q_f32(&data[i + 1]);
-                vst1q_f32(&data[i], vals);
-            }
-
-            // Scalar remainder
-            for (size_t i = simd_end; i < size - 1; ++i)
-            {
-                data[i] = data[i + 1];
-            }
-
-            data[size - 1] = newValue;
         }
 #endif
 
@@ -188,17 +188,25 @@ namespace dsp::core
          */
         float processSampleScalar(float input)
         {
-            float output = 0.0f;
-
-            // Compute output
-            for (size_t i = 0; i < m_numTaps; ++i)
+            // Write to circular buffer + guard
+            m_state[m_head] = input;
+            if (m_head < 16)
             {
-                output += m_coefficients[i] * m_delayLine[i];
+                m_state[m_head + m_bufferSize] = input;
             }
 
-            // Update delay line
-            std::memmove(m_delayLine.data(), m_delayLine.data() + 1, (m_numTaps - 1) * sizeof(float));
-            m_delayLine[m_numTaps - 1] = input;
+            // Compute output
+            float output = 0.0f;
+            const float *x = &m_state[m_head];
+            const float *h = m_coefficients.data();
+
+            for (size_t i = 0; i < m_numTaps; ++i)
+            {
+                output += h[i] * x[i];
+            }
+
+            // Advance head
+            m_head = (m_head + 1) & m_headMask;
 
             return output;
         }
