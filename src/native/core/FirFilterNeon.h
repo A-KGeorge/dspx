@@ -194,7 +194,7 @@ namespace dsp::core
         {
             // Advance head FIRST
             m_head = (m_head + 1) & m_headMask;
-            
+
             // Write to circular buffer + guard
             m_state[m_head] = input;
             if (m_head < 16)
