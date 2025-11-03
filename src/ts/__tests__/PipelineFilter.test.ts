@@ -85,10 +85,17 @@ describe("Pipeline Filter Stage", () => {
     );
 
     for (let i = 0; i < standaloneSliced.length; i++) {
-      assert.strictEqual(
-        pipelineSliced[i].toPrecision(6),
-        standaloneSliced[i].toPrecision(6),
-        `Mismatch at index ${i + skipSamples}`
+      // Use relative tolerance to account for float32 vs float64 precision
+      const relative_error = Math.abs(
+        (pipelineSliced[i] - standaloneSliced[i]) / standaloneSliced[i]
+      );
+      assert.ok(
+        relative_error < 1e-4,
+        `Mismatch at index ${i + skipSamples}: expected ${
+          standaloneSliced[i]
+        }, got ${
+          pipelineSliced[i]
+        } (relative error: ${relative_error.toExponential(2)})`
       );
     }
   });
