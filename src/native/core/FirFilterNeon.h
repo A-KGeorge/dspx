@@ -138,10 +138,8 @@ namespace dsp::core
 
             // Write input to current position AND guard zone (O(1) mirroring)
             m_state[m_head] = input;
-            if (m_head < 16) // Only update guard if we're near start (will wrap soon)
-            {
-                m_state[m_head + m_bufferSize] = input;
-            }
+            // Always mirror to guard zone - this is critical for wraparound reads!
+            m_state[m_head + m_bufferSize] = input;
 
             // NEON convolution: read BACKWARD from m_head (newest to oldest)
             // m_head points to newest sample, we need to read m_numTaps samples backward
@@ -207,10 +205,8 @@ namespace dsp::core
 
             // Write to circular buffer + guard
             m_state[m_head] = input;
-            if (m_head < 16)
-            {
-                m_state[m_head + m_bufferSize] = input;
-            }
+            // Always mirror to guard zone
+            m_state[m_head + m_bufferSize] = input;
 
             // Compute output (read backward from newest to oldest)
             float output = 0.0f;
