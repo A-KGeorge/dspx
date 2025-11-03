@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.10
+
+### Minor Changes
+
+- [`08a1f50`](https://github.com/A-KGeorge/dspx/commit/08a1f501dfe2db187bbe192c88f7d83e4153a853) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - fixed performance for convolution, add differential filter/linear regression/dot product for ts, optimized for arm neon as well
+
 ## 0.2.0-alpha.9
 
 ### Minor Changes
