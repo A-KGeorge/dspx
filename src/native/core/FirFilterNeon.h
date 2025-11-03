@@ -184,6 +184,20 @@ namespace dsp::core
 #endif
         }
 
+        /**
+         * @brief Reset filter state (clear circular buffer and guard zone)
+         */
+        void reset()
+        {
+            float *state = getState();
+            std::fill(state, state + (m_bufferSize * 2), 0.0f);
+            m_head = 0;
+            m_samplesProcessed = 0;
+        }
+
+        size_t getNumTaps() const { return m_numTaps; }
+        size_t getBufferSize() const { return m_bufferSize; }
+
     private:
         // Helper to get state pointer (platform-specific)
         inline float *getState()
@@ -203,20 +217,6 @@ namespace dsp::core
             return m_state.data();
 #endif
         }
-
-        /**
-         * @brief Reset filter state (clear circular buffer and guard zone)
-         */
-        void reset()
-        {
-            float *state = getState();
-            std::fill(state, state + (m_bufferSize * 2), 0.0f);
-            m_head = 0;
-            m_samplesProcessed = 0;
-        }
-
-        size_t getNumTaps() const { return m_numTaps; }
-        size_t getBufferSize() const { return m_bufferSize; }
 
     private:
         size_t m_numTaps;                  // Number of filter taps

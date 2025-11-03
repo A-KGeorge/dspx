@@ -347,7 +347,6 @@ namespace dsp::adapters
         void processBatchDirect(float *buffer, size_t numSamples, int numChannels)
         {
             size_t samplesPerChannel = numSamples / numChannels;
-            size_t kernelSize = m_kernel.size();
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
             // ARM NEON path: Use FirFilterNeon for optimal performance
@@ -413,6 +412,8 @@ namespace dsp::adapters
             }
 #else
             // Non-ARM fallback: Original scalar implementation
+            size_t kernelSize = m_kernel.size();
+
             // Resize de-interleaved buffers if channel count changed
             if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
             {
