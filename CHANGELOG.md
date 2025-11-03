@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.14
+
+### Patch Changes
+
+- [`46ea7ca`](https://github.com/A-KGeorge/dspx/commit/46ea7ca3d98eaf9cf84e67a61481c76b379fe9f3) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - pixel build 3
+
 ## 0.2.0-alpha.13
 
 ### Patch Changes
