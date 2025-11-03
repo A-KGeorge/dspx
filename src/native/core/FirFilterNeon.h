@@ -144,10 +144,20 @@ namespace dsp::core
             }
 
             // NEON convolution: read BACKWARD from m_head (newest to oldest)
-            // m_head points to newest sample, m_head-1 is previous, etc.
-            // But we want to read FORWARD in memory, so we read from (m_head - numTaps + 1)
-            // wrapped around, which with guard zone is just (m_head + bufferSize - numTaps + 1)
-            size_t readStart = (m_head + m_bufferSize - m_numTaps + 1) & (m_bufferSize - 1);
+            // m_head points to newest sample, we need to read m_numTaps samples backward
+            // The guard zone ensures contiguous reads even across the wrap boundary
+            // Calculate start position: if m_head >= (numTaps-1), read from [m_head - numTaps + 1]
+            // Otherwise, read from guard zone: [m_head + bufferSize - numTaps + 1]
+            size_t readStart;
+            if (m_head >= m_numTaps - 1)
+            {
+                readStart = m_head - m_numTaps + 1;
+            }
+            else
+            {
+                // Wrap using guard zone (no modulo needed!)
+                readStart = m_head + m_bufferSize - m_numTaps + 1;
+            }
             const float *x = &m_state[readStart];
             const float *h = m_coefficients.data();
 
@@ -204,7 +214,15 @@ namespace dsp::core
 
             // Compute output (read backward from newest to oldest)
             float output = 0.0f;
-            size_t readStart = (m_head + m_bufferSize - m_numTaps + 1) & (m_bufferSize - 1);
+            size_t readStart;
+            if (m_head >= m_numTaps - 1)
+            {
+                readStart = m_head - m_numTaps + 1;
+            }
+            else
+            {
+                readStart = m_head + m_bufferSize - m_numTaps + 1;
+            }
             const float *x = &m_state[readStart];
             const float *h = m_coefficients.data();
 

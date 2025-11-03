@@ -85,18 +85,33 @@ describe("Pipeline Filter Stage", () => {
     );
 
     for (let i = 0; i < standaloneSliced.length; i++) {
-      // Use relative tolerance to account for float32 vs float64 precision
-      const relative_error = Math.abs(
-        (pipelineSliced[i] - standaloneSliced[i]) / standaloneSliced[i]
-      );
-      assert.ok(
-        relative_error < 1e-4,
-        `Mismatch at index ${i + skipSamples}: expected ${
-          standaloneSliced[i]
-        }, got ${
-          pipelineSliced[i]
-        } (relative error: ${relative_error.toExponential(2)})`
-      );
+      // Use absolute tolerance for values near zero, relative for larger values
+      const expected = standaloneSliced[i];
+      const actual = pipelineSliced[i];
+      const abs_error = Math.abs(actual - expected);
+
+      // If values are near zero, use absolute tolerance
+      if (Math.abs(expected) < 1e-6) {
+        assert.ok(
+          abs_error < 1e-5,
+          `Mismatch at index ${
+            i + skipSamples
+          }: expected ${expected}, got ${actual} (absolute error: ${abs_error.toExponential(
+            2
+          )})`
+        );
+      } else {
+        // For larger values, use relative tolerance
+        const relative_error = abs_error / Math.abs(expected);
+        assert.ok(
+          relative_error < 1e-4,
+          `Mismatch at index ${
+            i + skipSamples
+          }: expected ${expected}, got ${actual} (relative error: ${relative_error.toExponential(
+            2
+          )})`
+        );
+      }
     }
   });
 
