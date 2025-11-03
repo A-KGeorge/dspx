@@ -133,6 +133,9 @@ namespace dsp::core
          */
         float processSampleNeon(float input)
         {
+            // Advance head FIRST (points to oldest sample position)
+            m_head = (m_head + 1) & m_headMask;
+
             // Write input to current position AND guard zone (O(1) mirroring)
             m_state[m_head] = input;
             if (m_head < 16) // Only update guard if we're near start (will wrap soon)
@@ -140,8 +143,12 @@ namespace dsp::core
                 m_state[m_head + m_bufferSize] = input;
             }
 
-            // NEON convolution: read forward from m_head (fully contiguous!)
-            const float *x = &m_state[m_head];
+            // NEON convolution: read BACKWARD from m_head (newest to oldest)
+            // m_head points to newest sample, m_head-1 is previous, etc.
+            // But we want to read FORWARD in memory, so we read from (m_head - numTaps + 1)
+            // wrapped around, which with guard zone is just (m_head + bufferSize - numTaps + 1)
+            size_t readStart = (m_head + m_bufferSize - m_numTaps + 1) & (m_bufferSize - 1);
+            const float *x = &m_state[readStart];
             const float *h = m_coefficients.data();
 
             constexpr size_t simd_width = 4;
@@ -176,9 +183,6 @@ namespace dsp::core
                 output += h[i] * x[i];
             }
 
-            // Advance head (O(1) with bitmask)
-            m_head = (m_head + 1) & m_headMask;
-
             return output;
         }
 #endif
@@ -188,6 +192,9 @@ namespace dsp::core
          */
         float processSampleScalar(float input)
         {
+            // Advance head FIRST
+            m_head = (m_head + 1) & m_headMask;
+            
             // Write to circular buffer + guard
             m_state[m_head] = input;
             if (m_head < 16)
@@ -195,18 +202,16 @@ namespace dsp::core
                 m_state[m_head + m_bufferSize] = input;
             }
 
-            // Compute output
+            // Compute output (read backward from newest to oldest)
             float output = 0.0f;
-            const float *x = &m_state[m_head];
+            size_t readStart = (m_head + m_bufferSize - m_numTaps + 1) & (m_bufferSize - 1);
+            const float *x = &m_state[readStart];
             const float *h = m_coefficients.data();
 
             for (size_t i = 0; i < m_numTaps; ++i)
             {
                 output += h[i] * x[i];
             }
-
-            // Advance head
-            m_head = (m_head + 1) & m_headMask;
 
             return output;
         }
