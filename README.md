@@ -339,9 +339,27 @@ const output = await pipeline.process(input, {
 | Batched callbacks                | 3.2M samples/sec | ✅ **Recommended** for production |
 | Individual callbacks             | 6.1M samples/sec | ⚠️ Development/debugging only     |
 
-**SIMD Acceleration:** Batch operations and rectification are 2-8x faster with AVX2/SSE2/NEON. See [SIMD_OPTIMIZATIONS.md](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/SIMD_OPTIMIZATIONS.md) for details.
+**SIMD Acceleration:** Batch operations and rectification are 2-8x faster with AVX2/SSE2/NEON on x86_64. See [SIMD_OPTIMIZATIONS.md](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/SIMD_OPTIMIZATIONS.md) for details.
 
 **Recommendation:** Use batched callbacks in production. Individual callbacks benchmark faster but block the Node.js event loop and can't integrate with real telemetry systems (Kafka, Datadog, Loki).
+
+### ⚠️ ARM/Mobile Platform Notice
+
+**ARM NEON optimizations are experimental.** Mobile/ARM devices face unique challenges:
+
+- **Thermal throttling** - Performance degrades under sustained load
+- **Power constraints** - Aggressive frequency scaling impacts benchmarks
+- **Memory hierarchy** - Different cache behavior than x86_64 desktop CPUs
+
+**Current Status:**
+
+- ✅ **Moving mode (streaming)** - FIR filters use optimized circular buffers with NEON
+- ⚠️ **Batch mode** - May not show speedup vs. scalar code on mobile devices
+- ⚠️ **FFT operations** - Naive implementations may outperform native on some ARM chips
+
+**We welcome contributions!** If you have ARM optimization expertise or access to ARM development hardware, please open an issue or PR. Mobile DSP is challenging and community input helps improve real-world performance.
+
+📖 **Read more:** [ARM Platform Status & Performance Notes](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/ARM_PLATFORM_STATUS.md)
 
 ---
 

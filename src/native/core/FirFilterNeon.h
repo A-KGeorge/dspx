@@ -4,6 +4,20 @@
  * @file FirFilterNeon.h
  * @brief ARM NEON-optimized FIR filter with guard-zone circular buffer
  *
+ * ⚠️ EXPERIMENTAL ARM OPTIMIZATION ⚠️
+ *
+ * This implementation uses ARM NEON intrinsics for vectorized FIR filtering.
+ * Performance on mobile/embedded ARM devices may vary due to:
+ * - Thermal throttling under sustained load
+ * - Power management and frequency scaling
+ * - Different memory hierarchy vs. desktop x86_64
+ *
+ * Tested on: Google Pixel 9 Pro XL (Tensor G4)
+ * Status: Works correctly but may not show speedup vs. scalar on all ARM chips.
+ *
+ * Community contributions welcome! If you have ARM optimization expertise or
+ * access to ARM development boards, please help improve mobile performance.
+ *
  * This implementation keeps O(1) state updates while enabling fully contiguous
  * NEON vectorization using a "guard zone" (mirrored buffer) technique.
  *
@@ -12,7 +26,8 @@
  * NEON load starting from 'head' can read contiguously without wrap-around logic.
  *
  * Performance: O(1) state update + fully vectorized O(N) convolution.
- * Expected gain vs naive circular buffer: 3-6x for 16-128 tap filters on ARM.
+ * Expected gain vs naive circular buffer: 3-6x for 16-128 tap filters on ARM desktop.
+ * Mobile results may vary - see note above.
  */
 
 #include <vector>
@@ -58,6 +73,19 @@ namespace dsp::core
                 throw std::invalid_argument("FIR coefficients cannot be empty");
             }
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            // One-time warning about experimental ARM support
+            static bool warned = false;
+            if (!warned)
+            {
+                fprintf(stderr,
+                        "\n⚠️  ARM NEON FIR optimization is experimental.\n"
+                        "   Mobile devices may not show speedup vs. scalar due to thermal/power constraints.\n"
+                        "   Contributions welcome: https://github.com/A-KGeorge/dspx/issues\n\n");
+                warned = true;
+            }
+#endif
+
             // Round up to next power of 2 for bitmask wrapping
             m_bufferSize = 1;
             while (m_bufferSize < m_numTaps)
@@ -81,8 +109,12 @@ namespace dsp::core
             // Guaranteed alignment eliminates potential unaligned load penalties
             size_t stateSize = (m_bufferSize * 2) * sizeof(float);
 
+            // Round up size to multiple of alignment (required by some aligned_alloc implementations)
+            constexpr size_t alignment = 32;
+            size_t alignedSize = ((stateSize + alignment - 1) / alignment) * alignment;
+
             // Use C11 aligned_alloc (available on POSIX systems and modern compilers)
-            m_stateAligned = static_cast<float *>(std::aligned_alloc(32, stateSize));
+            m_stateAligned = static_cast<float *>(std::aligned_alloc(alignment, alignedSize));
             if (!m_stateAligned)
             {
                 throw std::runtime_error("Failed to allocate aligned memory for FIR state buffer");

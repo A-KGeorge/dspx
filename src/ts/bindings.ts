@@ -748,6 +748,22 @@ class DspProcessor {
     const mode = params.mode || "moving";
     const method = params.method || "auto";
 
+    // Warn about ARM experimental status for moving mode (uses FirFilterNeon)
+    if (
+      mode === "moving" &&
+      (process.arch === "arm64" || process.arch === "arm")
+    ) {
+      // Use static flag to warn only once
+      if (!(globalThis as any).__dspx_arm_convolution_warned) {
+        console.warn(
+          "\n⚠️  ARM NEON convolution optimization is experimental for moving mode.\n" +
+            "   Mobile devices may not show speedup vs. scalar due to thermal/power constraints.\n" +
+            "   See: https://github.com/A-KGeorge/dsp_ts_redis#arm-platform-notice\n"
+        );
+        (globalThis as any).__dspx_arm_convolution_warned = true;
+      }
+    }
+
     if (mode !== "moving" && mode !== "batch") {
       throw new TypeError(
         `Convolution: mode must be 'moving' or 'batch', got '${mode}'`
