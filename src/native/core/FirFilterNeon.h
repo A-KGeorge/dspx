@@ -61,9 +61,13 @@ namespace dsp::core
             }
             m_headMask = m_bufferSize - 1;
 
-            // Store coefficients in FORWARD order (h[0] = newest tap)
-            // This matches the circular buffer access pattern
-            m_coefficients = coefficients;
+            // Reverse coefficients to match memory access pattern:
+            // readStart points to oldest sample, we read forward (oldest→newest)
+            // So h[0] should multiply oldest sample = original h[numTaps-1]
+            // This way: h_rev[0]*x[oldest] + ... + h_rev[N-1]*x[newest]
+            //         = h[N-1]*x[oldest] + ... + h[0]*x[newest] ✓
+            m_coefficients.resize(coefficients.size());
+            std::reverse_copy(coefficients.begin(), coefficients.end(), m_coefficients.begin());
 
             // Allocate state buffer + guard zone
             // Guard zone mirrors the entire circular buffer for contiguous wraparound reads
@@ -140,8 +144,10 @@ namespace dsp::core
             // Always mirror to guard zone - this is critical for wraparound reads!
             m_state[m_head + m_bufferSize] = input;
 
-            // NEON convolution: read BACKWARD from m_head (newest to oldest)
-            // m_head points to newest sample, we need to read m_numTaps samples backward
+            // NEON convolution: read samples from oldest to newest
+            // Coefficients are stored in REVERSE order, so:
+            // h_rev[0]*x[oldest] + h_rev[1]*x[older] + ... + h_rev[N-1]*x[newest]
+            // = h[N-1]*x[oldest] + ... + h[0]*x[newest] = correct FIR formula ✓
             // The guard zone ensures contiguous reads even across the wrap boundary
             // Calculate start position: if m_head >= (numTaps-1), read from [m_head - numTaps + 1]
             // Otherwise, read from guard zone: [m_head + bufferSize - numTaps + 1]

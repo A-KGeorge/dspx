@@ -5,6 +5,7 @@
 #include "../utils/ConvolutionPolicy.h"
 #include "../utils/SimdOps.h"
 #include "../core/FftEngine.h"
+#include "../core/FirFilterNeon.h"
 #include <vector>
 #include <string>
 #include <memory>
@@ -220,7 +221,9 @@ namespace dsp::adapters
         // De-interleaved buffers for cache-friendly processing
         std::vector<std::vector<float>> m_deinterleaved_buffers;
         std::vector<float> m_temp_output_channel;
-        std::vector<float> m_reversed_window; // Reversed window for SIMD convolution
+
+        // High-performance FIR filters for batch convolution (one per channel)
+        std::vector<std::unique_ptr<core::FirFilterNeon>> m_batch_fir_filters;
 
         // Reusable buffer for moving mode direct convolution (eliminates per-sample allocation)
         mutable std::vector<float> m_moving_temp_buffer;
@@ -390,6 +393,67 @@ namespace dsp::adapters
             size_t samplesPerChannel = numSamples / numChannels;
             size_t kernelSize = m_kernel.size();
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            // ARM NEON path: Use FirFilterNeon for optimal performance
+            // This eliminates per-sample gather overhead with O(1) circular buffer
+
+            // Initialize FIR filters for each channel (only once)
+            if (m_batch_fir_filters.size() != static_cast<size_t>(numChannels))
+            {
+                m_batch_fir_filters.clear();
+                for (int ch = 0; ch < numChannels; ++ch)
+                {
+                    m_batch_fir_filters.push_back(
+                        std::make_unique<core::FirFilterNeon>(m_kernel));
+                }
+            }
+
+            // Resize de-interleaved buffers if needed
+            if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
+            {
+                m_deinterleaved_buffers.resize(numChannels);
+                for (auto &buf : m_deinterleaved_buffers)
+                {
+                    buf.resize(samplesPerChannel);
+                }
+            }
+            else if (!m_deinterleaved_buffers.empty() &&
+                     m_deinterleaved_buffers[0].size() != samplesPerChannel)
+            {
+                for (auto &buf : m_deinterleaved_buffers)
+                {
+                    buf.resize(samplesPerChannel);
+                }
+            }
+
+            // Step 1: De-interleave and process each channel with FirFilterNeon
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                auto &fir = m_batch_fir_filters[ch];
+                auto &output = m_deinterleaved_buffers[ch];
+
+                // Reset filter state for batch mode (stateless)
+                fir->reset();
+
+                // Extract channel samples and process in-place
+                for (size_t i = 0; i < samplesPerChannel; ++i)
+                {
+                    float input = buffer[i * numChannels + ch];
+                    output[i] = fir->processSample(input);
+                }
+            }
+
+            // Step 2: Re-interleave output back to buffer
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                const auto &output = m_deinterleaved_buffers[ch];
+                for (size_t i = 0; i < samplesPerChannel; ++i)
+                {
+                    buffer[i * numChannels + ch] = output[i];
+                }
+            }
+#else
+            // Non-ARM fallback: Original scalar implementation
             // Resize de-interleaved buffers if channel count changed
             if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
             {
@@ -414,12 +478,6 @@ namespace dsp::adapters
                 m_temp_output_channel.resize(samplesPerChannel);
             }
 
-            // Resize reversed window buffer for SIMD (only allocate once)
-            if (m_reversed_window.size() != kernelSize)
-            {
-                m_reversed_window.resize(kernelSize);
-            }
-
             // Step 1: De-interleave input data for cache-friendly processing
             for (int ch = 0; ch < numChannels; ++ch)
             {
@@ -438,43 +496,16 @@ namespace dsp::adapters
                 float *output = m_temp_output_channel.data();
 
                 // Standard convolution: y[n] = sum(h[k] * x[n-k])
-                // For small K: simple loop (compiler auto-vectorizes)
-                // For large K: use explicit SIMD with window collection
                 for (size_t n = 0; n < samplesPerChannel; ++n)
                 {
                     float sum = 0.0f;
 
-                    if (kernelSize <= 16)
+                    // Simple scalar loop (compiler may auto-vectorize)
+                    for (size_t k = 0; k < kernelSize; ++k)
                     {
-                        // Small kernels: tight loop, compiler auto-vectorizes
-                        for (size_t k = 0; k < kernelSize; ++k)
+                        if (n >= k)
                         {
-                            if (n >= k)
-                            {
-                                sum += kernelPtr[k] * channelInput[n - k];
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // Large kernels: collect window and use SIMD dot product
-                        // This avoids the performance cliff from backward indexing
-                        if (n >= kernelSize - 1)
-                        {
-                            // Full window available - collect in forward order for SIMD
-                            for (size_t k = 0; k < kernelSize; ++k)
-                            {
-                                m_reversed_window[k] = channelInput[n - k];
-                            }
-                            sum = simd::dot_product(kernelPtr, m_reversed_window.data(), kernelSize);
-                        }
-                        else
-                        {
-                            // Partial window at the start
-                            for (size_t k = 0; k <= n; ++k)
-                            {
-                                sum += kernelPtr[k] * channelInput[n - k];
-                            }
+                            sum += kernelPtr[k] * channelInput[n - k];
                         }
                     }
 
@@ -487,6 +518,7 @@ namespace dsp::adapters
                     buffer[i * numChannels + ch] = output[i];
                 }
             }
+#endif
         }
 
         /**
