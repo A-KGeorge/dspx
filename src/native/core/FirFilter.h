@@ -20,6 +20,11 @@
 #include <memory>
 #include "../utils/CircularBufferArray.h"
 
+// Include NEON-optimized filter for ARM platforms
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include "FirFilterNeon.h"
+#endif
+
 namespace dsp
 {
     namespace core
@@ -137,6 +142,12 @@ namespace dsp
             size_t m_stateIndex;           // Current position in circular state buffer
             size_t m_stateMask;            // Bitmask for power-of-2 circular buffer (replaces modulo)
             bool m_stateful;               // Whether to maintain state between calls
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            // NEON-optimized filter for ARM (auto-selected for small-medium taps + float32)
+            std::unique_ptr<FirFilterNeon> m_neonFilter;
+            bool m_useNeon;
+#endif
 
             /**
              * Compute single output sample via convolution

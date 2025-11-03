@@ -81,11 +81,20 @@
         }],
         # Condition for arm64 architecture (Android, iOS, M1/M2 Macs, Tensor G4, etc.)
         ['target_arch=="arm64"', {
-          "cflags+": [ "-march=armv8-a+fp+simd" ],  # Enable NEON and FP on ARMv8
+          # ARMv8-a baseline: NEON + FP support (compatible with all ARMv8 CPUs)
+          "cflags+": [ "-march=armv8-a+fp+simd" ],
           "cflags_cc+": [ "-march=armv8-a+fp+simd" ],
           'xcode_settings': {
             'OTHER_CPLUSPLUSFLAGS+': [ '-march=armv8-a+fp+simd' ]
           }
+          # Optional: Upgrade to ARMv8.2-a for newer CPUs (Tensor G4, Apple M2+, Graviton 3+)
+          # Enables FP16 arithmetic and additional optimizations
+          # Uncomment the lines below to enable ARMv8.2-a:
+          # "cflags+": [ "-march=armv8.2-a+fp16" ],
+          # "cflags_cc+": [ "-march=armv8.2-a+fp16" ],
+          # 'xcode_settings': {
+          #   'OTHER_CPLUSPLUSFLAGS+': [ '-march=armv8.2-a+fp16' ]
+          # }
         }],
         # Condition for 32-bit ARM (older Android devices)
         ['target_arch=="arm"', {

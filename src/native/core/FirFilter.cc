@@ -28,6 +28,20 @@ namespace dsp
                 throw std::invalid_argument("FIR filter requires at least one coefficient");
             }
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            // Auto-select NEON for float32 + small-medium taps (where transposed form wins)
+            // For large taps (>128), circular buffer's O(1) state update is better than O(N) shift
+            m_useNeon = false;
+            if constexpr (std::is_same_v<T, float>)
+            {
+                if (stateful && coefficients.size() >= 8 && coefficients.size() <= 128)
+                {
+                    m_neonFilter = std::make_unique<FirFilterNeon>(coefficients);
+                    m_useNeon = true;
+                }
+            }
+#endif
+
             if (stateful)
             {
                 // Round up to next power of 2 for efficient circular buffer (enables bitwise AND instead of modulo)
@@ -50,6 +64,14 @@ namespace dsp
             {
                 throw std::runtime_error("processSample() requires stateful mode");
             }
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            // Use NEON filter if available
+            if (m_useNeon && m_neonFilter)
+            {
+                return static_cast<T>(m_neonFilter->processSample(static_cast<float>(input)));
+            }
+#endif
 
             // Store input in circular buffer
             m_state[m_stateIndex] = input;
@@ -86,6 +108,18 @@ namespace dsp
         template <typename T>
         void FirFilter<T>::process(const T *input, T *output, size_t length, bool stateless)
         {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            // Use NEON batch processing for stateful mode
+            if (!stateless && m_stateful && m_useNeon && m_neonFilter)
+            {
+                for (size_t i = 0; i < length; ++i)
+                {
+                    output[i] = static_cast<T>(m_neonFilter->processSample(static_cast<float>(input[i])));
+                }
+                return;
+            }
+#endif
+
             if (stateless || !m_stateful)
             {
                 // Stateless mode: each output depends only on current window
@@ -166,6 +200,13 @@ namespace dsp
         template <typename T>
         void FirFilter<T>::reset()
         {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            if (m_useNeon && m_neonFilter)
+            {
+                m_neonFilter->reset();
+            }
+#endif
+
             if (m_stateful)
             {
                 std::fill(m_state.begin(), m_state.end(), T(0));
@@ -182,6 +223,23 @@ namespace dsp
             }
 
             m_coefficients = coefficients;
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            // Update NEON filter if in use
+            m_useNeon = false;
+            if constexpr (std::is_same_v<T, float>)
+            {
+                if (m_stateful && coefficients.size() >= 8 && coefficients.size() <= 128)
+                {
+                    m_neonFilter = std::make_unique<FirFilterNeon>(coefficients);
+                    m_useNeon = true;
+                }
+                else
+                {
+                    m_neonFilter.reset();
+                }
+            }
+#endif
 
             if (m_stateful)
             {

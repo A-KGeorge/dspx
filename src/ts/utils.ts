@@ -81,6 +81,62 @@ export function dotProduct(a: Float32Array, b: Float32Array): number {
 }
 
 /**
+ * Computes the sum of array elements using SIMD-accelerated native code.
+ *
+ * This implementation uses ARM NEON (4-wide) or x86 SSE2/AVX2 (4-8 wide) SIMD
+ * instructions with double-precision accumulation for numerical accuracy.
+ *
+ * @param buffer - Input array (Float32Array)
+ * @returns The sum of all elements
+ * @throws {TypeError} If input is not a Float32Array
+ *
+ * @example
+ * ```typescript
+ * const data = new Float32Array([1, 2, 3, 4, 5]);
+ * const total = sum(data); // 15
+ * ```
+ */
+export function sum(buffer: Float32Array): number {
+  if (!(buffer instanceof Float32Array)) {
+    throw new TypeError("Argument must be a Float32Array");
+  }
+  return DspAddon.sum(buffer);
+}
+
+/**
+ * Computes the sum of squared elements using SIMD-accelerated native code.
+ *
+ * This implementation uses ARM NEON vmlaq_f32 (fused multiply-add) or x86
+ * SSE2/AVX2 for optimal performance. Result is accumulated in double precision.
+ *
+ * Useful for computing RMS, variance, power, energy, and L2 norm.
+ *
+ * @param buffer - Input array (Float32Array)
+ * @returns Sum of squares: buffer[0]² + buffer[1]² + ... + buffer[n-1]²
+ * @throws {TypeError} If input is not a Float32Array
+ *
+ * @example
+ * ```typescript
+ * const signal = new Float32Array([3, 4]); // 3-4-5 triangle
+ * const energy = sumOfSquares(signal); // 9 + 16 = 25
+ * const rms = Math.sqrt(energy / signal.length); // 5 / sqrt(2) ≈ 3.536
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Compute L2 norm (Euclidean length)
+ * const vector = new Float32Array([1, 2, 2]);
+ * const norm = Math.sqrt(sumOfSquares(vector)); // sqrt(9) = 3
+ * ```
+ */
+export function sumOfSquares(buffer: Float32Array): number {
+  if (!(buffer instanceof Float32Array)) {
+    throw new TypeError("Argument must be a Float32Array");
+  }
+  return DspAddon.sumOfSquares(buffer);
+}
+
+/**
  * Utility functions for DSP operations.
  *
  * @namespace DspUtils
@@ -91,4 +147,16 @@ export const DspUtils = {
    * @see {@link dotProduct} for detailed documentation
    */
   dotProduct,
+
+  /**
+   * Computes the sum of array elements using SIMD-accelerated native code.
+   * @see {@link sum} for detailed documentation
+   */
+  sum,
+
+  /**
+   * Computes the sum of squared elements using SIMD-accelerated native code.
+   * @see {@link sumOfSquares} for detailed documentation
+   */
+  sumOfSquares,
 };

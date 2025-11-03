@@ -7,6 +7,11 @@
 #include <algorithm>
 #include "../utils/SimdOps.h"
 
+// Include ARM NEON intrinsics if available
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 namespace dsp
 {
     namespace core
@@ -270,7 +275,57 @@ namespace dsp
                 // Update weights: w[n+1] = (1 - mu*lambda) * w[n] + mu * e[n] * x[n]
                 // where (1 - mu*lambda) is the leakage factor for regularization
                 T leakage = 1.0 - m_mu * m_lambda;
+                T mu_error = mu_n * error;
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+                // NEON-optimized weight update for ARM processors
+                const size_t simd_width = 4;
+                const size_t simd_count = m_numTaps / simd_width;
+                const size_t simd_end = simd_count * simd_width;
+
+                float32x4_t leakage_vec = vdupq_n_f32(leakage);
+                float32x4_t mu_error_vec = vdupq_n_f32(mu_error);
+
+                // Vectorized update: weights[i] = leakage * weights[i] + mu_error * x[i]
+                for (size_t i = 0; i < simd_end; i += simd_width)
+                {
+                    // Get indices for input buffer (circular)
+                    size_t idx0 = (writeIdx + m_numTaps - 1 - i) % m_numTaps;
+                    size_t idx1 = (writeIdx + m_numTaps - 2 - i) % m_numTaps;
+                    size_t idx2 = (writeIdx + m_numTaps - 3 - i) % m_numTaps;
+                    size_t idx3 = (writeIdx + m_numTaps - 4 - i) % m_numTaps;
+
+                    // Load 4 input samples (must be done individually due to circular buffer)
+                    float x_vals[4] = {
+                        static_cast<float>(inputBuffer[idx0]),
+                        static_cast<float>(inputBuffer[idx1]),
+                        static_cast<float>(inputBuffer[idx2]),
+                        static_cast<float>(inputBuffer[idx3])};
+                    float32x4_t x = vld1q_f32(x_vals);
+
+                    // Load 4 weights
+                    float32x4_t w = vld1q_f32(reinterpret_cast<const float *>(&weights[i]));
+
+                    // Apply leakage: w *= leakage
+                    w = vmulq_f32(w, leakage_vec);
+
+                    // Fused multiply-add: w += mu_error * x
+                    w = vmlaq_f32(w, mu_error_vec, x);
+
+                    // Store updated weights
+                    vst1q_f32(reinterpret_cast<float *>(&weights[i]), w);
+                }
+
+                // Handle remainder (scalar)
+                for (size_t i = simd_end; i < m_numTaps; ++i)
+                {
+                    size_t idx = (writeIdx + m_numTaps - 1 - i) % m_numTaps;
+                    T x_i = inputBuffer[idx];
+                    weights[i] = leakage * weights[i] + mu_error * x_i;
+                }
+
+#else
+                // Scalar weight update for non-ARM platforms
                 for (size_t i = 0; i < m_numTaps; ++i)
                 {
                     size_t idx = (writeIdx + m_numTaps - 1 - i) % m_numTaps;
@@ -279,6 +334,7 @@ namespace dsp
                     // Apply leaky LMS update
                     weights[i] = leakage * weights[i] + mu_n * error * x_i;
                 }
+#endif
             }
         };
 

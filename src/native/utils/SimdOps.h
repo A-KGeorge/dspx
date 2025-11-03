@@ -293,6 +293,36 @@ namespace dsp::simd
 
         return total;
 
+#elif defined(SIMD_NEON)
+        const size_t simd_width = 4;
+        const size_t simd_count = size / simd_width;
+        const size_t simd_end = simd_count * simd_width;
+
+        // ARM NEON: Accumulate in float, then convert to double for precision
+        float32x4_t acc = vdupq_n_f32(0.0f);
+
+        for (size_t i = 0; i < simd_end; i += simd_width)
+        {
+            float32x4_t values = vld1q_f32(&buffer[i]);
+            acc = vaddq_f32(acc, values);
+        }
+
+        // Pairwise add to get horizontal sum, then convert to double
+        float32x2_t sum_lo = vget_low_f32(acc);
+        float32x2_t sum_hi = vget_high_f32(acc);
+        float32x2_t sum_pair = vadd_f32(sum_lo, sum_hi);
+        float32x2_t sum_final = vpadd_f32(sum_pair, sum_pair);
+
+        double total = static_cast<double>(vget_lane_f32(sum_final, 0));
+
+        // Handle remainder
+        for (size_t i = simd_end; i < size; ++i)
+        {
+            total += static_cast<double>(buffer[i]);
+        }
+
+        return total;
+
 #else
         // Scalar with Kahan summation for precision
         double sum = 0.0;
@@ -388,6 +418,36 @@ namespace dsp::simd
         _mm_storeu_pd(result, acc1);
         double total = result[0] + result[1];
 
+        for (size_t i = simd_end; i < size; ++i)
+        {
+            double val = static_cast<double>(buffer[i]);
+            total += val * val;
+        }
+
+        return total;
+
+#elif defined(SIMD_NEON)
+        const size_t simd_width = 4;
+        const size_t simd_count = size / simd_width;
+        const size_t simd_end = simd_count * simd_width;
+
+        // ARM NEON: Accumulate squares in float, then convert to double
+        float32x4_t acc = vdupq_n_f32(0.0f);
+
+        for (size_t i = 0; i < simd_end; i += simd_width)
+        {
+            float32x4_t values = vld1q_f32(&buffer[i]);
+            // Fused multiply-add: acc += values * values
+            acc = vmlaq_f32(acc, values, values);
+        }
+
+        // Convert to double for precision
+        float temp[4];
+        vst1q_f32(temp, acc);
+        double total = static_cast<double>(temp[0]) + static_cast<double>(temp[1]) +
+                       static_cast<double>(temp[2]) + static_cast<double>(temp[3]);
+
+        // Handle remainder
         for (size_t i = simd_end; i < size; ++i)
         {
             double val = static_cast<double>(buffer[i]);
