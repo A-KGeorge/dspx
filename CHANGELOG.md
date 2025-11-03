@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.15
+
+### Patch Changes
+
+- [`d066be6`](https://github.com/A-KGeorge/dspx/commit/d066be6bf297d7ddefef8b9f2a12d76c4e253301) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - added disclaimer for arm processors
+
 ## 0.2.0-alpha.14
 
 ### Patch Changes
