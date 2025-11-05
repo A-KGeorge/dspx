@@ -859,11 +859,245 @@ namespace dsp
         return result;
     }
 
+    /**
+     * Autocorrelation - FFT-based autocorrelation utility function
+     *
+     * Computes the autocorrelation of a signal using the FFT method:
+     * autocorr(x) = IFFT(|FFT(x)|²)
+     *
+     * This is much faster than direct computation for large signals.
+     * Returns only the non-negative lags (first half + center point).
+     *
+     * @param signal - Input signal (Float32Array)
+     * @returns Autocorrelation result (Float32Array), length = signal.length
+     */
+    Napi::Value Autocorrelation(const Napi::CallbackInfo &info)
+    {
+        Napi::Env env = info.Env();
+
+        // Validate input
+        if (info.Length() < 1)
+        {
+            Napi::TypeError::New(env, "Expected signal (Float32Array)").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        if (!info[0].IsTypedArray())
+        {
+            Napi::TypeError::New(env, "Signal must be Float32Array").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        Napi::Float32Array signalArray = info[0].As<Napi::Float32Array>();
+        size_t n = signalArray.ElementLength();
+
+        if (n == 0)
+        {
+            // Empty input -> empty output
+            return Napi::Float32Array::New(env, 0);
+        }
+
+        if (n == 1)
+        {
+            // Single sample: autocorrelation is just the squared value
+            Napi::Float32Array result = Napi::Float32Array::New(env, 1);
+            float val = signalArray[0];
+            result[0] = val * val;
+            return result;
+        }
+
+        float *data = signalArray.Data();
+
+        // For autocorrelation, we need to zero-pad to at least 2*n to avoid circular convolution
+        // Compute next power of 2 for efficiency
+        size_t minSize = 2 * n;
+        size_t paddedSize = 1;
+        while (paddedSize < minSize)
+        {
+            paddedSize <<= 1;
+        }
+
+        // Create FFT engine with padded size
+        auto engine = std::make_unique<core::FftEngine<float>>(paddedSize);
+        size_t fftSize = engine->getSize();
+
+        // Prepare input: copy signal and zero-pad
+        std::vector<Complex> input(fftSize);
+        for (size_t i = 0; i < n; ++i)
+        {
+            input[i] = Complex(data[i], 0.0f);
+        }
+        for (size_t i = n; i < fftSize; ++i)
+        {
+            input[i] = Complex(0.0f, 0.0f);
+        }
+
+        // Step 1: Forward FFT
+        std::vector<Complex> fftResult(fftSize);
+        engine->fft(input.data(), fftResult.data());
+
+        // Step 2: Compute |FFT(x)|² (power spectrum)
+        std::vector<Complex> powerSpectrum(fftSize);
+        for (size_t i = 0; i < fftSize; ++i)
+        {
+            float mag = std::abs(fftResult[i]);
+            powerSpectrum[i] = Complex(mag * mag, 0.0f);
+        }
+
+        // Step 3: Inverse FFT to get autocorrelation
+        std::vector<Complex> autocorr(fftSize);
+        engine->ifft(powerSpectrum.data(), autocorr.data());
+
+        // Step 4: Extract real parts (imaginary should be ~0)
+        // Return only first n values (non-negative lags)
+        Napi::Float32Array result = Napi::Float32Array::New(env, n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            result[i] = autocorr[i].real();
+        }
+
+        return result;
+    }
+
+    /**
+     * Cross-Correlation using FFT
+     * Computes cross-correlation: xcorr(x, y) = IFFT(FFT(x) * conj(FFT(y)))
+     *
+     * Cross-correlation measures the similarity between two signals as a function
+     * of the time lag applied to one of them. This is useful for:
+     * - Time delay estimation (finding the lag where signals align)
+     * - Pattern matching (finding where a template appears in a signal)
+     * - Signal alignment (synchronizing two signals)
+     * - Radar/sonar (detecting reflected signals with time delay)
+     *
+     * Uses FFT-based algorithm for O(n log n) efficiency vs O(n²) direct computation.
+     *
+     * @param x - First signal (Float32Array)
+     * @param y - Second signal (Float32Array), must have same length as x
+     * @returns Cross-correlation result (Float32Array), length = x.length
+     */
+    Napi::Value CrossCorrelation(const Napi::CallbackInfo &info)
+    {
+        Napi::Env env = info.Env();
+
+        // Validate inputs
+        if (info.Length() < 2)
+        {
+            Napi::TypeError::New(env, "Expected two signals (Float32Array)").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        if (!info[0].IsTypedArray() || !info[1].IsTypedArray())
+        {
+            Napi::TypeError::New(env, "Both signals must be Float32Array").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        Napi::Float32Array xArray = info[0].As<Napi::Float32Array>();
+        Napi::Float32Array yArray = info[1].As<Napi::Float32Array>();
+        size_t nx = xArray.ElementLength();
+        size_t ny = yArray.ElementLength();
+
+        if (nx != ny)
+        {
+            Napi::RangeError::New(env, "Both signals must have the same length").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        size_t n = nx;
+
+        if (n == 0)
+        {
+            // Empty input -> empty output
+            return Napi::Float32Array::New(env, 0);
+        }
+
+        if (n == 1)
+        {
+            // Single sample: cross-correlation is just x * y
+            Napi::Float32Array result = Napi::Float32Array::New(env, 1);
+            result[0] = xArray[0] * yArray[0];
+            return result;
+        }
+
+        float *xData = xArray.Data();
+        float *yData = yArray.Data();
+
+        // For cross-correlation, we need to zero-pad to at least 2*n to avoid circular convolution
+        // Compute next power of 2 for efficiency
+        size_t minSize = 2 * n;
+        size_t paddedSize = 1;
+        while (paddedSize < minSize)
+        {
+            paddedSize <<= 1;
+        }
+
+        // Create FFT engine with padded size
+        auto engine = std::make_unique<core::FftEngine<float>>(paddedSize);
+        size_t fftSize = engine->getSize();
+
+        // Prepare first signal: copy and zero-pad
+        std::vector<Complex> xInput(fftSize);
+        for (size_t i = 0; i < n; ++i)
+        {
+            xInput[i] = Complex(xData[i], 0.0f);
+        }
+        for (size_t i = n; i < fftSize; ++i)
+        {
+            xInput[i] = Complex(0.0f, 0.0f);
+        }
+
+        // Prepare second signal: copy and zero-pad
+        std::vector<Complex> yInput(fftSize);
+        for (size_t i = 0; i < n; ++i)
+        {
+            yInput[i] = Complex(yData[i], 0.0f);
+        }
+        for (size_t i = n; i < fftSize; ++i)
+        {
+            yInput[i] = Complex(0.0f, 0.0f);
+        }
+
+        // Step 1: Forward FFT of both signals
+        std::vector<Complex> xFFT(fftSize);
+        std::vector<Complex> yFFT(fftSize);
+        engine->fft(xInput.data(), xFFT.data());
+        engine->fft(yInput.data(), yFFT.data());
+
+        // Step 2: Compute conj(FFT(x)) * FFT(y)
+        // This gives us xcorr[k] = sum x[i] * y[i+k]
+        std::vector<Complex> product(fftSize);
+        for (size_t i = 0; i < fftSize; ++i)
+        {
+            product[i] = std::conj(xFFT[i]) * yFFT[i];
+        }
+
+        // Step 3: Inverse FFT to get cross-correlation
+        std::vector<Complex> xcorr(fftSize);
+        engine->ifft(product.data(), xcorr.data());
+
+        // Step 4: Extract real parts (imaginary should be ~0)
+        // Return only first n values (non-negative lags)
+        Napi::Float32Array result = Napi::Float32Array::New(env, n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            result[i] = xcorr[i].real();
+        }
+
+        return result;
+    }
+
     // Export init function (add to existing module init)
     void InitFftBindings(Napi::Env env, Napi::Object exports)
     {
         FftProcessor::Init(env, exports);
         MovingFftProcessor::Init(env, exports);
+
+        // Export autocorrelation utility function
+        exports.Set("autocorrelation", Napi::Function::New(env, Autocorrelation));
+
+        // Export cross-correlation utility function
+        exports.Set("crossCorrelation", Napi::Function::New(env, CrossCorrelation));
     }
 
 } // namespace dsp

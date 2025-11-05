@@ -123,6 +123,15 @@ namespace dsp::adapters
             return padded;
         }
 
+    private:
+        void ensureScratchBuffer(size_t samples_per_channel)
+        {
+            if (m_scratch_channel.size() < samples_per_channel)
+            {
+                m_scratch_channel.resize(samples_per_channel * 2);
+            }
+        }
+
         /**
          * Process a single channel
          */
@@ -130,18 +139,20 @@ namespace dsp::adapters
         {
             size_t samples_per_channel = numSamples / numChannels;
 
-            // Extract channel data (de-interleave)
-            std::vector<float> channel_data(samples_per_channel);
+            // Ensure scratch buffer is large enough
+            ensureScratchBuffer(samples_per_channel);
+
+            // Extract channel data (de-interleave) into scratch buffer
             for (size_t i = 0; i < samples_per_channel; ++i)
             {
-                channel_data[i] = buffer[i * numChannels + channel];
+                m_scratch_channel[i] = buffer[i * numChannels + channel];
             }
 
             // Determine padding
             size_t pad_width = m_filter_length - 1;
 
             // Apply symmetric padding
-            std::vector<float> padded = applyPadding(channel_data.data(), samples_per_channel, pad_width);
+            std::vector<float> padded = applyPadding(m_scratch_channel.data(), samples_per_channel, pad_width);
 
             // Convolve with filters (stateless mode)
             std::vector<float> approx_filtered(padded.size());
@@ -199,6 +210,9 @@ namespace dsp::adapters
         size_t m_filter_length;
         std::unique_ptr<dsp::core::FirFilter<float>> m_lowpass_filter;
         std::unique_ptr<dsp::core::FirFilter<float>> m_highpass_filter;
+
+        // Pre-allocated scratch buffer for channel extraction
+        std::vector<float> m_scratch_channel;
     };
 
 } // namespace dsp::adapters

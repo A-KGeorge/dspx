@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../IDspStage.h"
+#include "../utils/SimdOps.h"
 #include <Eigen/Dense>
 #include <vector>
 #include <memory>
@@ -114,30 +115,51 @@ namespace dsp
 
                 size_t samplesPerChannel = numSamples / numChannels;
 
-                // Temporary vectors for computation
+                // Ensure scratch buffers for channel data
+                ensureScratchBuffers(samplesPerChannel);
+
+                // Deinterleave all channels into planar scratch buffers
+                for (int ch = 0; ch < m_numChannels; ++ch)
+                {
+                    for (size_t i = 0; i < samplesPerChannel; ++i)
+                    {
+                        m_scratch_channels[ch][i] = buffer[i * numChannels + ch];
+                    }
+                }
+
+                // Temporary vectors for transformation
                 Eigen::VectorXf x_n(m_numChannels);
                 Eigen::VectorXf y_n(m_numComponents);
 
+                // Process each sample
                 for (size_t i = 0; i < samplesPerChannel; ++i)
                 {
-                    // 1. Extract interleaved input vector x_n
+                    // 1. Load input vector from planar buffers
                     for (int c = 0; c < m_numChannels; ++c)
                     {
-                        x_n(c) = buffer[i * numChannels + c];
+                        x_n(c) = m_scratch_channels[c][i];
                     }
 
                     // 2. Apply transformation: y = W^T * (x - mean)
-                    // Matrix is (C × N), we compute (N × 1) = (N × C) * (C × 1)
-                    // So we use m_matrix.transpose()
                     y_n = m_matrix.transpose() * (x_n - m_mean);
 
-                    // 3. Write transformed components back to buffer
+                    // 3. Write to output scratch buffers
                     for (int j = 0; j < m_numComponents; ++j)
                     {
-                        buffer[i * numChannels + j] = y_n(j);
+                        m_scratch_output[j][i] = y_n(j);
+                    }
+                }
+
+                // Interleave output back to buffer
+                for (size_t i = 0; i < samplesPerChannel; ++i)
+                {
+                    // Write transformed components
+                    for (int j = 0; j < m_numComponents; ++j)
+                    {
+                        buffer[i * numChannels + j] = m_scratch_output[j][i];
                     }
 
-                    // 4. Zero out any remaining channels if doing dimensionality reduction
+                    // Zero out any remaining channels if doing dimensionality reduction
                     for (int j = m_numComponents; j < numChannels; ++j)
                     {
                         buffer[i * numChannels + j] = 0.0f;
@@ -232,11 +254,34 @@ namespace dsp
             const std::string &getTransformType() const { return m_transformType; }
 
         private:
+            void ensureScratchBuffers(size_t samplesPerChannel)
+            {
+                if (m_scratch_channels.size() != static_cast<size_t>(m_numChannels) ||
+                    (m_scratch_channels.size() > 0 && m_scratch_channels[0].size() < samplesPerChannel))
+                {
+                    size_t new_capacity = samplesPerChannel * 2;
+                    m_scratch_channels.resize(m_numChannels);
+                    m_scratch_output.resize(m_numComponents);
+                    for (int ch = 0; ch < m_numChannels; ++ch)
+                    {
+                        m_scratch_channels[ch].resize(new_capacity);
+                    }
+                    for (int ch = 0; ch < m_numComponents; ++ch)
+                    {
+                        m_scratch_output[ch].resize(new_capacity);
+                    }
+                }
+            }
+
             int m_numChannels;           ///< Number of input channels
             int m_numComponents;         ///< Number of output components
             std::string m_transformType; ///< Type identifier ("pca", "ica", "whiten")
             Eigen::VectorXf m_mean;      ///< Channel mean vector (C × 1)
             Eigen::MatrixXf m_matrix;    ///< Transformation matrix (C × N)
+
+            // Pre-allocated scratch buffers (planar layout)
+            std::vector<std::vector<float>> m_scratch_channels; ///< Input channels
+            std::vector<std::vector<float>> m_scratch_output;   ///< Output components
         };
 
     } // namespace adapters

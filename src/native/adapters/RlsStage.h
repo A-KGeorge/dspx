@@ -2,6 +2,7 @@
 
 #include "../IDspStage.h"
 #include "../core/RlsFilter.h"
+#include "../utils/SimdOps.h"
 #include <napi.h>
 #include <memory>
 #include <vector>
@@ -78,19 +79,23 @@ namespace dsp
 
                 size_t samplesPerChannel = numSamples / numChannels;
 
-                // Process each sample pair
+                // Ensure scratch buffers (Phase 1 optimization)
+                ensureScratchBuffers(samplesPerChannel);
+
+                // Deinterleave using SIMD
+                dsp::simd::deinterleave2Ch(buffer, m_scratch_ch0.data(), m_scratch_ch1.data(), samplesPerChannel);
+
+                // Process each sample
                 for (size_t i = 0; i < samplesPerChannel; ++i)
                 {
-                    float primary = buffer[i * numChannels + 0]; // Channel 0: x[n]
-                    float desired = buffer[i * numChannels + 1]; // Channel 1: d[n]
-
                     // RLS adaptive filtering
-                    float error = m_filter->processSample(primary, desired);
-
-                    // Output error on both channels
-                    buffer[i * numChannels + 0] = error;
-                    buffer[i * numChannels + 1] = error;
+                    float error = m_filter->processSample(m_scratch_ch0[i], m_scratch_ch1[i]);
+                    m_scratch_ch0[i] = error;
+                    m_scratch_ch1[i] = error;
                 }
+
+                // Interleave output using SIMD
+                dsp::simd::interleave2Ch(m_scratch_ch0.data(), m_scratch_ch1.data(), buffer, samplesPerChannel);
             }
 
             Napi::Object serializeState(Napi::Env env) const override
@@ -195,11 +200,27 @@ namespace dsp
             }
 
         private:
+            void ensureScratchBuffers(size_t samplesPerChannel)
+            {
+                if (m_scratch_ch0.capacity() < samplesPerChannel)
+                {
+                    size_t new_capacity = samplesPerChannel * 2;
+                    m_scratch_ch0.reserve(new_capacity);
+                    m_scratch_ch1.reserve(new_capacity);
+                }
+                m_scratch_ch0.resize(samplesPerChannel);
+                m_scratch_ch1.resize(samplesPerChannel);
+            }
+
             size_t m_numTaps;
             float m_lambda;
             float m_delta;
             bool m_initialized;
             std::unique_ptr<dsp::core::RlsFilter> m_filter;
+
+            // Pre-allocated scratch buffers
+            std::vector<float> m_scratch_ch0;
+            std::vector<float> m_scratch_ch1;
         };
 
     } // namespace adapters

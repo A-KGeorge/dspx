@@ -1126,3 +1126,120 @@ export interface CspTransformParams {
   /** Number of output filters/components */
   numFilters: number;
 }
+
+/**
+ * Options for detrend utility function
+ */
+export interface DetrendOptions {
+  /**
+   * Type of detrending to apply:
+   * - "linear": Remove linear trend (y = mx + b) using least-squares regression
+   * - "constant": Remove mean only (simpler, faster)
+   *
+   * **Default**: "linear"
+   *
+   * **Use Cases:**
+   * - "linear": For signals with drift or gradual baseline changes (EEG, ECG, sensors)
+   * - "constant": For removing DC offset when signal has no trend
+   *
+   * **Example:**
+   * ```typescript
+   * // Remove linear drift from sensor data
+   * const detrended = DspUtils.detrend(signal, { type: "linear" });
+   *
+   * // Remove DC offset (faster)
+   * const centered = DspUtils.detrend(signal, { type: "constant" });
+   * ```
+   */
+  type?: "linear" | "constant";
+}
+
+/**
+ * Options for autocorrelation computation
+ *
+ * Autocorrelation measures the similarity of a signal with a delayed version of itself.
+ * It's computed efficiently using FFT: autocorr(x) = IFFT(|FFT(x)|²)
+ *
+ * **Applications:**
+ * - **Pitch detection**: Find fundamental frequency in speech/audio
+ * - **Periodicity analysis**: Detect repeating patterns
+ * - **Echo detection**: Identify time delays in reflected signals
+ * - **Spectral estimation**: Power spectral density via Wiener-Khinchin theorem
+ *
+ * **Example:**
+ * ```typescript
+ * // Detect pitch in audio signal
+ * const autocorr = DspUtils.autocorrelation(audioSignal);
+ *
+ * // Find first peak after zero lag (fundamental period)
+ * let maxLag = 0;
+ * let maxVal = 0;
+ * for (let lag = 1; lag < autocorr.length / 2; lag++) {
+ *   if (autocorr[lag] > maxVal) {
+ *     maxVal = autocorr[lag];
+ *     maxLag = lag;
+ *   }
+ * }
+ * const fundamentalFreq = sampleRate / maxLag;
+ * ```
+ *
+ * **Normalization:**
+ * The result is NOT normalized. To normalize, divide by `autocorr[0]`
+ * (the zero-lag value, equal to signal energy).
+ */
+export interface AutocorrelationOptions {
+  // Currently no options, but interface reserved for future extensions
+  // (e.g., normalization, window functions, max lag)
+}
+
+/**
+ * Options for cross-correlation computation.
+ *
+ * Cross-correlation measures the similarity between two signals as a function of time lag.
+ * The result xcorr[k] represents the correlation when signal y is shifted by k samples
+ * relative to signal x.
+ *
+ * **Applications:**
+ *
+ * 1. **Time Delay Estimation**: Find the lag where two signals are most similar
+ *    - Acoustic echo cancellation (finding microphone-to-speaker delay)
+ *    - Seismic analysis (finding arrival time differences)
+ *    - Radar/sonar (measuring round-trip time)
+ *
+ * 2. **Pattern Matching**: Find where a template signal appears in a larger signal
+ *    - Template matching in signal processing
+ *    - Finding repeated patterns or motifs
+ *    - Detecting known signatures in noisy data
+ *
+ * 3. **Signal Alignment**: Synchronize two related signals
+ *    - Multi-sensor data fusion
+ *    - Aligning audio tracks
+ *    - Synchronizing video and audio streams
+ *
+ * **Example - Time Delay Estimation:**
+ * ```typescript
+ * // Find delay between microphone and reference signal
+ * const reference = new Float32Array([...]);  // Clean reference
+ * const measured = new Float32Array([...]);   // Delayed + noisy measurement
+ *
+ * const xcorr = DspUtils.crossCorrelation(reference, measured);
+ *
+ * // Find peak to determine delay
+ * let maxCorr = -Infinity;
+ * let delay = 0;
+ * for (let i = 0; i < xcorr.length; i++) {
+ *   if (xcorr[i] > maxCorr) {
+ *     maxCorr = xcorr[i];
+ *     delay = i;
+ *   }
+ * }
+ * console.log(`Detected delay: ${delay} samples`);
+ * ```
+ *
+ * **Note:** The result is not normalized. To get normalized cross-correlation (range [-1, 1]),
+ * divide by sqrt(energy(x) * energy(y)) where energy = sum of squares.
+ */
+export interface CrossCorrelationOptions {
+  // Currently no options, but interface reserved for future extensions
+  // (e.g., normalization, mode selection, max lag)
+}

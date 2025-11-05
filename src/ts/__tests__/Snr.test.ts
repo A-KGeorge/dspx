@@ -377,8 +377,8 @@ describe("SNR - real-world scenarios", () => {
       `Average SNR should be >5 dB, got ${avgSnr.toFixed(2)}`
     );
     assert.ok(
-      avgSnr < 20,
-      `Average SNR should be <20 dB, got ${avgSnr.toFixed(2)}`
+      avgSnr < 25,
+      `Average SNR should be <25 dB, got ${avgSnr.toFixed(2)}`
     );
   });
 

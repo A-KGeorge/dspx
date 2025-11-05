@@ -2,6 +2,7 @@
 
 #include "../IDspStage.h"
 #include "../core/RmsFilter.h"
+#include "../utils/SimdOps.h"
 #include <vector>
 #include <stdexcept>
 #include <cmath>
@@ -32,12 +33,6 @@ namespace dsp::adapters
      */
     class SnrStage : public IDspStage
     {
-    private:
-        size_t m_window_size;                     // Window size for RMS computation
-        dsp::core::RmsFilter<float> m_signal_rms; // RMS filter for signal channel
-        dsp::core::RmsFilter<float> m_noise_rms;  // RMS filter for noise channel
-        bool m_initialized;                       // Track if filters are initialized
-
     public:
         /**
          * @brief Construct SNR stage with specified window size.
@@ -62,28 +57,46 @@ namespace dsp::adapters
 
         void process(float *buffer, size_t numSamples, int numChannels, const float *timestamps = nullptr) override
         {
+            // This is not used for resizing stages - processResizing() is called instead
+            throw std::runtime_error("SNR stage requires processResizing() to be called");
+        }
+
+        size_t calculateOutputSize(size_t inputSize) const override
+        {
+            // SNR reduces 2 channels to 1 channel, so output size is half of input size
+            return inputSize / 2;
+        }
+
+        void processResizing(const float *inputBuffer, size_t inputSize,
+                             float *outputBuffer, size_t &outputSize,
+                             int numChannels, const float *timestamps = nullptr) override
+        {
             // Validate 2-channel requirement
             if (numChannels != 2)
             {
                 throw std::invalid_argument("SNR stage requires exactly 2 channels (signal, noise)");
             }
 
-            size_t samplesPerChannel = numSamples / 2;
+            size_t samplesPerChannel = inputSize / 2;
+            outputSize = samplesPerChannel; // Single channel output
+
+            // Ensure scratch buffers
+            ensureScratchBuffers(samplesPerChannel);
 
             // Constants for SNR computation
             const float epsilon = 1e-10f; // Prevent division by zero
             const float min_db = -100.0f;
             const float max_db = 100.0f;
 
-            // Process sample by sample
+            // Deinterleave using SIMD
+            dsp::simd::deinterleave2Ch(inputBuffer, m_scratch_signal.data(), m_scratch_noise.data(), samplesPerChannel);
+
+            // Process sample by sample and compute SNR
             for (size_t i = 0; i < samplesPerChannel; ++i)
             {
-                float signal_sample = buffer[i * 2 + 0]; // Channel 0 (signal)
-                float noise_sample = buffer[i * 2 + 1];  // Channel 1 (noise)
-
-                // Update RMS filters with new samples (sample-count based, not time-aware)
-                float signal_rms = m_signal_rms.addSample(signal_sample);
-                float noise_rms = m_noise_rms.addSample(noise_sample);
+                // Update RMS filters with new samples
+                float signal_rms = m_signal_rms.addSample(m_scratch_signal[i]);
+                float noise_rms = m_noise_rms.addSample(m_scratch_noise[i]);
 
                 // Compute signal and noise power (RMS^2)
                 float signal_power = signal_rms * signal_rms;
@@ -101,10 +114,8 @@ namespace dsp::adapters
                     snr_db = std::max(min_db, std::min(max_db, snr_db)); // Clamp [-100, 100]
                 }
 
-                buffer[i] = snr_db; // Write SNR to output (single channel)
+                outputBuffer[i] = snr_db; // Write SNR to output (single channel)
             }
-
-            // Output is now single-channel (SNR values in dB)
         }
 
         Napi::Object serializeState(Napi::Env env) const override
@@ -188,6 +199,28 @@ namespace dsp::adapters
         {
             return 1; // SNR outputs single channel (dB values)
         }
+
+    private:
+        void ensureScratchBuffers(size_t samplesPerChannel)
+        {
+            if (m_scratch_signal.capacity() < samplesPerChannel)
+            {
+                size_t new_capacity = samplesPerChannel * 2;
+                m_scratch_signal.reserve(new_capacity);
+                m_scratch_noise.reserve(new_capacity);
+            }
+            m_scratch_signal.resize(samplesPerChannel);
+            m_scratch_noise.resize(samplesPerChannel);
+        }
+
+        size_t m_window_size;                     // Window size for RMS computation
+        dsp::core::RmsFilter<float> m_signal_rms; // RMS filter for signal channel
+        dsp::core::RmsFilter<float> m_noise_rms;  // RMS filter for noise channel
+        bool m_initialized;                       // Track if filters are initialized
+
+        // Pre-allocated scratch buffers
+        std::vector<float> m_scratch_signal;
+        std::vector<float> m_scratch_noise;
     };
 
 } // namespace dsp::adapters

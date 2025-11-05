@@ -1,6 +1,7 @@
 #pragma once
 #include "../IDspStage.h"
 #include "../core/DifferentiableFilter.h"
+#include "../utils/SimdOps.h"
 #include <vector>
 #include <memory>
 #include <stdexcept>
@@ -84,40 +85,26 @@ namespace dsp
 
             size_t samplesPerChannel = numSamples / numChannels;
 
-            // Temporary buffers for deinterleaving
-            std::vector<float> primarySignal(samplesPerChannel); // x[n] - channel 0
-            std::vector<float> desiredSignal(samplesPerChannel); // d[n] - channel 1
-            std::vector<float> outputSignal(samplesPerChannel);  // y[n] - filter output
-            std::vector<float> errorSignal(samplesPerChannel);   // e[n] - error (cleaned signal)
+            // Ensure scratch buffers are large enough (grows as needed, never shrinks)
+            ensureScratchBuffers(samplesPerChannel);
 
-            // Deinterleave: Extract channel 0 (primary) and channel 1 (desired)
-            for (size_t i = 0; i < samplesPerChannel; ++i)
-            {
-                primarySignal[i] = buffer[i * numChannels + 0]; // Channel 0: x[n]
-                desiredSignal[i] = buffer[i * numChannels + 1]; // Channel 1: d[n]
-            }
+            // Deinterleave using SIMD-optimized function
+            dsp::simd::deinterleave2Ch(buffer, m_scratch_primary.data(), m_scratch_desired.data(), samplesPerChannel);
 
             // Run adaptive LMS filter
             // Note: DifferentiableFilter uses planar layout internally, but that's abstracted away
             m_filter->process(
-                primarySignal.data(), // input x[n]
-                desiredSignal.data(), // desired d[n]
-                outputSignal.data(),  // output y[n] (filter prediction)
-                errorSignal.data(),   // error e[n] = d[n] - y[n]
+                m_scratch_primary.data(), // input x[n]
+                m_scratch_desired.data(), // desired d[n]
+                m_scratch_output.data(),  // output y[n] (filter prediction)
+                m_scratch_error.data(),   // error e[n] = d[n] - y[n]
                 samplesPerChannel,
                 true // adapt = true (update weights)
             );
 
-            // Write back interleaved result
-            // For noise cancellation, the output is the error signal e[n]
-            // For system identification, you might want y[n] instead (see below)
-            for (size_t i = 0; i < samplesPerChannel; ++i)
-            {
-                // Output the cleaned signal (error) to both channels
-                // This allows downstream stages to process it
-                buffer[i * numChannels + 0] = errorSignal[i]; // Channel 0: e[n]
-                buffer[i * numChannels + 1] = errorSignal[i]; // Channel 1: e[n] (duplicate for consistency)
-            }
+            // Interleave error signal back to buffer using SIMD
+            // For noise cancellation, output is the error signal e[n] on both channels
+            dsp::simd::interleave2Ch(m_scratch_error.data(), m_scratch_error.data(), buffer, samplesPerChannel);
 
             // Alternative output modes (could be configurable):
             // 1. Noise cancellation (current): output = e[n] = d[n] - y[n]
@@ -190,12 +177,36 @@ namespace dsp
         }
 
     private:
+        void ensureScratchBuffers(size_t samplesPerChannel)
+        {
+            if (m_scratch_primary.capacity() < samplesPerChannel)
+            {
+                // Over-allocate to reduce future resizes (2x growth strategy)
+                size_t new_capacity = samplesPerChannel * 2;
+                m_scratch_primary.reserve(new_capacity);
+                m_scratch_desired.reserve(new_capacity);
+                m_scratch_output.reserve(new_capacity);
+                m_scratch_error.reserve(new_capacity);
+            }
+            // Resize to exact size needed (doesn't reallocate if within capacity)
+            m_scratch_primary.resize(samplesPerChannel);
+            m_scratch_desired.resize(samplesPerChannel);
+            m_scratch_output.resize(samplesPerChannel);
+            m_scratch_error.resize(samplesPerChannel);
+        }
+
         size_t m_numTaps;
         float m_learningRate;
         bool m_normalized;
         float m_lambda;
         bool m_initialized = false;
         std::unique_ptr<dsp::core::DifferentiableFilter<float>> m_filter;
+
+        // Pre-allocated scratch buffers (Phase 1 optimization)
+        std::vector<float> m_scratch_primary;
+        std::vector<float> m_scratch_desired;
+        std::vector<float> m_scratch_output;
+        std::vector<float> m_scratch_error;
     };
 
 } // namespace dsp
