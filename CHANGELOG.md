@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.16
+
+### Minor Changes
+
+- [`af68940`](https://github.com/A-KGeorge/dspx/commit/af68940be7378c34f3a1e60bc0814b9a61d3acc9) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - added filters, optimized fir
+
 ## 0.2.0-alpha.15
 
 ### Patch Changes
