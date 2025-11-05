@@ -422,7 +422,8 @@ describe("SNR - chaining with other stages", () => {
     let avgSnr = 0;
 
     pipeline.Snr({ windowSize: 10 }).tap((result: Float32Array) => {
-      avgSnr = result.reduce((a: number, b: number) => a + b, 0) / result.length;
+      avgSnr =
+        result.reduce((a: number, b: number) => a + b, 0) / result.length;
     });
 
     const input = new Float32Array([
