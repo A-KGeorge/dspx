@@ -20,6 +20,8 @@ import type {
   DecimateParams,
   ResampleParams,
   ConvolutionParams,
+  WaveletTransformParams,
+  HilbertEnvelopeParams,
   PipelineCallbacks,
   LogEntry,
   SampleBatch,
@@ -730,7 +732,7 @@ class DspProcessor {
    * const output = await pipeline.process(emgGrid, {
    *   sampleRate: 2000,
    *   channels: 80 // 10 * 8 sensors
-   * });
+   * });\
    */
   convolution(params: ConvolutionParams): this {
     if (!params.kernel || params.kernel.length === 0) {
@@ -961,6 +963,116 @@ class DspProcessor {
     });
 
     this.stages.push(`lmsFilter:${params.numTaps}taps`);
+    return this;
+  }
+
+  /**
+   * Add a Discrete Wavelet Transform (DWT) stage to the pipeline
+   * Decomposes signal into approximation and detail coefficients
+   * Output format: [approximation_coeffs, detail_coefficients]
+   *
+   * @param params - Wavelet configuration
+   * @param params.wavelet - Wavelet type (haar/db1-db10)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Haar wavelet (simplest)
+   * pipeline.WaveletTransform({ wavelet: "haar" });
+   *
+   * @example
+   * // Daubechies-4 wavelet (common choice)
+   * pipeline.WaveletTransform({ wavelet: "db4" });
+   *
+   * @example
+   * // Pipeline chaining
+   * pipeline
+   *   .WaveletTransform({ wavelet: "db2" })
+   *   .HilbertEnvelope({ windowSize: 128 });
+   */
+  WaveletTransform(params: WaveletTransformParams): this {
+    if (!params.wavelet) {
+      throw new TypeError("WaveletTransform: wavelet parameter is required");
+    }
+
+    const validWavelets = [
+      "haar",
+      "db1",
+      "db2",
+      "db3",
+      "db4",
+      "db5",
+      "db6",
+      "db7",
+      "db8",
+      "db9",
+      "db10",
+    ];
+    if (!validWavelets.includes(params.wavelet)) {
+      throw new TypeError(
+        `WaveletTransform: Unknown wavelet type '${
+          params.wavelet
+        }'. Valid types: ${validWavelets.join(", ")}`
+      );
+    }
+
+    this.nativeInstance.addStage("waveletTransform", params);
+    this.stages.push(`waveletTransform:${params.wavelet}`);
+    return this;
+  }
+
+  /**
+   * Add a Hilbert Envelope extraction stage to the pipeline
+   * Computes amplitude envelope using FFT-based Hilbert transform
+   * Useful for AM demodulation, envelope detection, and instantaneous amplitude
+   *
+   * @param params - Hilbert envelope configuration
+   * @param params.windowSize - FFT window size (must be positive)
+   * @param params.hopSize - Hop size between windows (default: windowSize/2)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Basic envelope detection
+   * pipeline.HilbertEnvelope({ windowSize: 256 });
+   *
+   * @example
+   * // With custom hop size (75% overlap)
+   * pipeline.HilbertEnvelope({
+   *   windowSize: 512,
+   *   hopSize: 128
+   * });
+   *
+   * @example
+   * // Chain with smoothing
+   * pipeline
+   *   .HilbertEnvelope({ windowSize: 256 })
+   *   .MovingAverage({ mode: "moving", windowSize: 10 });
+   */
+  HilbertEnvelope(params: HilbertEnvelopeParams): this {
+    if (params.windowSize === undefined || params.windowSize === null) {
+      throw new TypeError("HilbertEnvelope: windowSize parameter is required");
+    }
+
+    if (params.windowSize <= 0 || !Number.isInteger(params.windowSize)) {
+      throw new TypeError(
+        `HilbertEnvelope: window size must be greater than 0 and an integer, got ${params.windowSize}`
+      );
+    }
+
+    if (params.hopSize !== undefined) {
+      if (
+        params.hopSize < 1 ||
+        params.hopSize > params.windowSize ||
+        !Number.isInteger(params.hopSize)
+      ) {
+        throw new TypeError(
+          `HilbertEnvelope: hop size must be between 1 and window size (${params.windowSize}), got ${params.hopSize}`
+        );
+      }
+    }
+
+    this.nativeInstance.addStage("hilbertEnvelope", params);
+    const hopSize = params.hopSize || Math.floor(params.windowSize / 2);
+    this.stages.push(`hilbertEnvelope:win${params.windowSize}:hop${hopSize}`);
     return this;
   }
 

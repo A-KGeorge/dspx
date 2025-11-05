@@ -15,6 +15,8 @@
 #include "adapters/ConvolutionStage.h"       // Convolution stage
 #include "adapters/LinearRegressionStage.h"  // Linear Regression stage
 #include "adapters/LmsStage.h"               // LMS Adaptive Filter stage
+#include "adapters/WaveletTransformStage.h"  // Wavelet Transform stage
+#include "adapters/HilbertEnvelopeStage.h"   // Hilbert Envelope stage
 
 namespace dsp
 {
@@ -504,6 +506,36 @@ namespace dsp
             }
 
             return std::make_unique<dsp::LmsStage>(numTaps, learningRate, normalized, lambda);
+        };
+
+        // Factory for Wavelet Transform stage
+        m_stageFactories["waveletTransform"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("wavelet"))
+            {
+                throw std::invalid_argument("WaveletTransform: 'wavelet' is required (e.g., 'haar', 'db2', 'db4')");
+            }
+            std::string waveletName = params.Get("wavelet").As<Napi::String>().Utf8Value();
+
+            return std::make_unique<dsp::adapters::WaveletTransformStage>(waveletName);
+        };
+
+        // Factory for Hilbert Envelope stage
+        m_stageFactories["hilbertEnvelope"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("windowSize"))
+            {
+                throw std::invalid_argument("HilbertEnvelope: 'windowSize' is required");
+            }
+            size_t windowSize = params.Get("windowSize").As<Napi::Number>().Uint32Value();
+
+            size_t hopSize = windowSize / 2; // Default: 50% overlap
+            if (params.Has("hopSize"))
+            {
+                hopSize = params.Get("hopSize").As<Napi::Number>().Uint32Value();
+            }
+
+            return std::make_unique<dsp::adapters::HilbertEnvelopeStage>(windowSize, hopSize);
         };
     }
 

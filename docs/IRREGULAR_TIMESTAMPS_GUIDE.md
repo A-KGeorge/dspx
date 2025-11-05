@@ -21,6 +21,8 @@ Unlike some systems that require explicit "resampling to regular" operations, **
 | Stage                                     | Timestamp Handling | Example                                                             |
 | ----------------------------------------- | ------------------ | ------------------------------------------------------------------- |
 | **Convolution**                           | Sample-based       | Applies kernel sample-by-sample, doesn't use timestamps             |
+| **WaveletTransform**                      | Sample-based       | Decomposes signal sample-by-sample, doesn't use timestamps          |
+| **HilbertEnvelope**                       | Sample-based       | Windowed FFT processing, doesn't use timestamps                     |
 | **RMS** (with `windowDuration`)           | Time-based         | Maintains exact time window (e.g., 100ms) regardless of sample rate |
 | **MovingAverage** (with `windowDuration`) | Time-based         | Uses timestamps to compute time-based averages                      |
 | **Interpolate/Decimate/Resample**         | Resizing           | Adjusts timestamps based on resampling factor                       |
@@ -179,10 +181,18 @@ pipeline.ZScoreNormalize({
   windowSize: 50,
 });
 
+// Sample-based: Wavelet decomposition (NEW!)
+pipeline.WaveletTransform({ wavelet: "db4" });
+
+// Sample-based: Hilbert envelope (NEW!)
+pipeline.HilbertEnvelope({ windowSize: 256 });
+
 // Process with irregular timestamps
 // - Convolution: uses samples
 // - RMS: uses timestamps (100ms)
 // - ZScoreNormalize: uses samples (50 samples)
+// - WaveletTransform: uses samples
+// - HilbertEnvelope: uses samples
 const output = await pipeline.process(samples, timestamps, { channels: 1 });
 ```
 
@@ -226,13 +236,58 @@ Run it with:
 node test-irregular-example.js
 ```
 
+## Advanced Signal Analysis
+
+The following sample-based stages work seamlessly with irregular timestamps in pipelines:
+
+### Wavelet Transform (NEW in v0.2.0-alpha.15)
+
+Decomposes signals into approximation and detail coefficients:
+
+```javascript
+pipeline.WaveletTransform({ wavelet: "db4" });
+
+// Processes samples sequentially, ignoring timestamp irregularities
+// Useful for: Multi-resolution analysis, denoising, feature extraction
+```
+
+**See [Wavelet & Hilbert Guide](./WAVELET_HILBERT_GUIDE.md) for detailed examples.**
+
+### Hilbert Envelope (NEW in v0.2.0-alpha.15)
+
+Extracts amplitude envelope using FFT-based analytic signal:
+
+```javascript
+pipeline.HilbertEnvelope({ windowSize: 256, hopSize: 128 });
+
+// Windowed FFT processing, sample-based (doesn't use timestamps)
+// Useful for: AM demodulation, EMG envelope, bearing fault detection
+```
+
+**See [Wavelet & Hilbert Guide](./WAVELET_HILBERT_GUIDE.md) for detailed examples.**
+
+### Combined Multi-Scale Analysis
+
+```javascript
+// Irregular sensor data with jitter
+const pipeline = createDspPipeline();
+pipeline
+  .WaveletTransform({ wavelet: "db4" }) // Multi-resolution (sample-based)
+  .HilbertEnvelope({ windowSize: 256 }) // Envelope extraction (sample-based)
+  .Rms({ mode: "moving", windowDuration: 100 }); // Time-based smoothing (uses timestamps!)
+
+// The pipeline intelligently mixes sample-based and time-based processing
+const output = await pipeline.process(samples, timestamps, { channels: 1 });
+```
+
 ## Summary
 
-| Aspect                   | dspx Approach                        |
-| ------------------------ | ------------------------------------ |
-| **Timestamp Flow**       | Automatic through entire pipeline    |
-| **Explicit Resampling**  | Not needed for time-based processing |
-| **Time-Based Windows**   | Use `windowDuration` parameter       |
-| **Sample-Based Windows** | Use `windowSize` parameter           |
-| **Mixing Approaches**    | Fully supported in same pipeline     |
-| **Irregular Data**       | Handled natively without conversion  |
+| Aspect                   | dspx Approach                         |
+| ------------------------ | ------------------------------------- |
+| **Timestamp Flow**       | Automatic through entire pipeline     |
+| **Explicit Resampling**  | Not needed for time-based processing  |
+| **Time-Based Windows**   | Use `windowDuration` parameter        |
+| **Sample-Based Windows** | Use `windowSize` parameter            |
+| **Mixing Approaches**    | Fully supported in same pipeline      |
+| **Irregular Data**       | Handled natively without conversion   |
+| **Advanced Stages**      | Wavelet, Hilbert work with timestamps |

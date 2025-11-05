@@ -116,6 +116,11 @@ export type {
   InterpolateParams,
   ResampleParams,
   ConvolutionParams,
+
+  // Wavelet and Hilbert
+  WaveletType,
+  WaveletTransformParams,
+  HilbertEnvelopeParams,
 } from "./types.js";
 export type {
   RouteHandler,

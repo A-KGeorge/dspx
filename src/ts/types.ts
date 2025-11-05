@@ -623,6 +623,52 @@ export interface ConvolutionParams {
 }
 
 /**
+ * Valid wavelet types for discrete wavelet transform
+ */
+export type WaveletType =
+  | "haar"
+  | "db1"
+  | "db2"
+  | "db3"
+  | "db4"
+  | "db5"
+  | "db6"
+  | "db7"
+  | "db8"
+  | "db9"
+  | "db10";
+
+/**
+ * Parameters for wavelet transform stage
+ */
+export interface WaveletTransformParams {
+  /**
+   * Wavelet type to use for decomposition
+   * - Haar / db1: Simplest, 2 coefficients
+   * - db2-db10: Daubechies wavelets with increasing smoothness
+   */
+  wavelet: WaveletType;
+}
+
+/**
+ * Parameters for Hilbert envelope stage
+ */
+export interface HilbertEnvelopeParams {
+  /**
+   * FFT window size for Hilbert transform
+   * Must be a positive integer
+   */
+  windowSize: number;
+
+  /**
+   * Hop size (stride) between windows
+   * Must be between 1 and windowSize
+   * Default: windowSize / 2 (50% overlap)
+   */
+  hopSize?: number;
+}
+
+/**
  * Spectral features extracted from FFT
  */
 export interface SpectralFeatures {
