@@ -651,6 +651,12 @@ namespace dsp
         Eigen::MatrixXf Cov1 = (X1_centered.transpose() * X1_centered) / float(numSamples1 - 1);
         Eigen::MatrixXf Cov2 = (X2_centered.transpose() * X2_centered) / float(numSamples2 - 1);
 
+        // **3.5. Add regularization for numerical stability (especially on macOS)**
+        // Small regularization term prevents singular matrices
+        const float reg = 1e-6f;
+        Cov1.diagonal().array() += reg;
+        Cov2.diagonal().array() += reg;
+
         // **4. Solve generalized eigenvalue problem: Cov1 * v = λ * Cov2 * v**
         // Equivalent to: Cov2^(-1) * Cov1 * v = λ * v
         // Use Eigen's generalized eigenvalue solver
