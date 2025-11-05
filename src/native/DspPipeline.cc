@@ -18,6 +18,16 @@
 #include "adapters/RlsStage.h"               // RLS Adaptive Filter stage
 #include "adapters/WaveletTransformStage.h"  // Wavelet Transform stage
 #include "adapters/HilbertEnvelopeStage.h"   // Hilbert Envelope stage
+#include "adapters/MatrixTransformStage.h"   // Matrix Transform stage (PCA/ICA/Whitening)
+#include "adapters/GscPreprocessorStage.h"   // GSC Preprocessor for adaptive beamforming
+#include "adapters/ChannelSelectorStage.h"   // Channel selector for reducing channel count
+#include "adapters/ChannelSelectStage.h"     // Channel selector by indices (select/reorder)
+#include "adapters/ChannelMergeStage.h"      // Channel merger/duplicator (merge/expand)
+#include "adapters/ClipDetectionStage.h"     // Clip detection stage
+#include "adapters/PeakDetectionStage.h"     // Peak detection stage
+#include "adapters/DifferentiatorStage.h"    // Differentiator stage
+#include "adapters/IntegratorStage.h"        // Integrator stage
+#include "adapters/SnrStage.h"               // SNR stage
 
 namespace dsp
 {
@@ -563,6 +573,221 @@ namespace dsp
 
             return std::make_unique<dsp::adapters::HilbertEnvelopeStage>(windowSize, hopSize);
         };
+
+        // Factory for PCA Transform stage
+        m_stageFactories["pcaTransform"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("pcaMatrix") || !params.Has("mean") ||
+                !params.Has("numChannels") || !params.Has("numComponents"))
+            {
+                throw std::invalid_argument("PcaTransform: requires 'pcaMatrix', 'mean', 'numChannels', 'numComponents'");
+            }
+
+            Napi::Float32Array matrixArray = params.Get("pcaMatrix").As<Napi::Float32Array>();
+            Napi::Float32Array meanArray = params.Get("mean").As<Napi::Float32Array>();
+            int numChannels = params.Get("numChannels").As<Napi::Number>().Int32Value();
+            int numComponents = params.Get("numComponents").As<Napi::Number>().Int32Value();
+
+            std::vector<float> matrix(matrixArray.Data(), matrixArray.Data() + matrixArray.ElementLength());
+            std::vector<float> mean(meanArray.Data(), meanArray.Data() + meanArray.ElementLength());
+
+            return std::make_unique<dsp::adapters::MatrixTransformStage>(
+                matrix, mean, numChannels, numComponents, "pca");
+        };
+
+        // Factory for ICA Transform stage
+        m_stageFactories["icaTransform"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("icaMatrix") || !params.Has("mean") ||
+                !params.Has("numChannels") || !params.Has("numComponents"))
+            {
+                throw std::invalid_argument("IcaTransform: requires 'icaMatrix', 'mean', 'numChannels', 'numComponents'");
+            }
+
+            Napi::Float32Array matrixArray = params.Get("icaMatrix").As<Napi::Float32Array>();
+            Napi::Float32Array meanArray = params.Get("mean").As<Napi::Float32Array>();
+            int numChannels = params.Get("numChannels").As<Napi::Number>().Int32Value();
+            int numComponents = params.Get("numComponents").As<Napi::Number>().Int32Value();
+
+            std::vector<float> matrix(matrixArray.Data(), matrixArray.Data() + matrixArray.ElementLength());
+            std::vector<float> mean(meanArray.Data(), meanArray.Data() + meanArray.ElementLength());
+
+            return std::make_unique<dsp::adapters::MatrixTransformStage>(
+                matrix, mean, numChannels, numComponents, "ica");
+        };
+
+        // Factory for Whitening Transform stage
+        m_stageFactories["whiteningTransform"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("whiteningMatrix") || !params.Has("mean") ||
+                !params.Has("numChannels") || !params.Has("numComponents"))
+            {
+                throw std::invalid_argument("WhiteningTransform: requires 'whiteningMatrix', 'mean', 'numChannels', 'numComponents'");
+            }
+
+            Napi::Float32Array matrixArray = params.Get("whiteningMatrix").As<Napi::Float32Array>();
+            Napi::Float32Array meanArray = params.Get("mean").As<Napi::Float32Array>();
+            int numChannels = params.Get("numChannels").As<Napi::Number>().Int32Value();
+            int numComponents = params.Get("numComponents").As<Napi::Number>().Int32Value();
+
+            std::vector<float> matrix(matrixArray.Data(), matrixArray.Data() + matrixArray.ElementLength());
+            std::vector<float> mean(meanArray.Data(), meanArray.Data() + meanArray.ElementLength());
+
+            return std::make_unique<dsp::adapters::MatrixTransformStage>(
+                matrix, mean, numChannels, numComponents, "whiten");
+        };
+
+        // Factory for GSC Preprocessor stage (adaptive beamforming)
+        m_stageFactories["gscPreprocessor"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("numChannels") || !params.Has("steeringWeights") ||
+                !params.Has("blockingMatrix"))
+            {
+                throw std::invalid_argument("GscPreprocessor: requires 'numChannels', 'steeringWeights', 'blockingMatrix'");
+            }
+
+            int numChannels = params.Get("numChannels").As<Napi::Number>().Int32Value();
+            Napi::Float32Array steeringArray = params.Get("steeringWeights").As<Napi::Float32Array>();
+            Napi::Float32Array blockingArray = params.Get("blockingMatrix").As<Napi::Float32Array>();
+
+            std::vector<float> steeringWeights(steeringArray.Data(), steeringArray.Data() + steeringArray.ElementLength());
+            std::vector<float> blockingMatrix(blockingArray.Data(), blockingArray.Data() + blockingArray.ElementLength());
+
+            return std::make_unique<dsp::adapters::GscPreprocessorStage>(
+                numChannels, steeringWeights, blockingMatrix);
+        };
+
+        // Factory for Channel Selector stage
+        m_stageFactories["channelSelector"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("numInputChannels") || !params.Has("numOutputChannels"))
+            {
+                throw std::invalid_argument("ChannelSelector: requires 'numInputChannels', 'numOutputChannels'");
+            }
+
+            int numInputChannels = params.Get("numInputChannels").As<Napi::Number>().Int32Value();
+            int numOutputChannels = params.Get("numOutputChannels").As<Napi::Number>().Int32Value();
+
+            return std::make_unique<dsp::adapters::ChannelSelectorStage>(
+                numInputChannels, numOutputChannels);
+        };
+
+        // Channel Select (by indices) factory
+        m_stageFactories["channelSelect"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("channels") || !params.Has("numInputChannels"))
+            {
+                throw std::invalid_argument("ChannelSelect: requires 'channels' array and 'numInputChannels'");
+            }
+
+            Napi::Array channelsArray = params.Get("channels").As<Napi::Array>();
+            std::vector<int> channels;
+            for (uint32_t i = 0; i < channelsArray.Length(); ++i)
+            {
+                channels.push_back(channelsArray.Get(i).As<Napi::Number>().Int32Value());
+            }
+
+            int numInputChannels = params.Get("numInputChannels").As<Napi::Number>().Int32Value();
+
+            return std::make_unique<dsp::adapters::ChannelSelectStage>(
+                channels, numInputChannels);
+        };
+
+        // Channel Merge factory
+        m_stageFactories["channelMerge"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("mapping") || !params.Has("numInputChannels"))
+            {
+                throw std::invalid_argument("ChannelMerge: requires 'mapping' array and 'numInputChannels'");
+            }
+
+            Napi::Array mappingArray = params.Get("mapping").As<Napi::Array>();
+            std::vector<int> mapping;
+            for (uint32_t i = 0; i < mappingArray.Length(); ++i)
+            {
+                mapping.push_back(mappingArray.Get(i).As<Napi::Number>().Int32Value());
+            }
+
+            int numInputChannels = params.Get("numInputChannels").As<Napi::Number>().Int32Value();
+
+            return std::make_unique<dsp::adapters::ChannelMergeStage>(
+                mapping, numInputChannels);
+        };
+
+        // ===================================================================
+        // Clip Detection Stage
+        // ===================================================================
+        m_stageFactories["clipDetection"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("threshold"))
+            {
+                throw std::invalid_argument("ClipDetection: requires 'threshold' parameter");
+            }
+
+            float threshold = params.Get("threshold").As<Napi::Number>().FloatValue();
+
+            return std::make_unique<dsp::adapters::ClipDetectionStage>(threshold);
+        };
+
+        // ===================================================================
+        // Peak Detection Stage
+        // ===================================================================
+        m_stageFactories["peakDetection"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("threshold"))
+            {
+                throw std::invalid_argument("PeakDetection: requires 'threshold' parameter");
+            }
+
+            float threshold = params.Get("threshold").As<Napi::Number>().FloatValue();
+
+            return std::make_unique<dsp::adapters::PeakDetectionStage>(threshold);
+        };
+
+        // ===================================================================
+        // Differentiator Stage
+        // ===================================================================
+        m_stageFactories["differentiator"] = [](const Napi::Object &params)
+        {
+            // No parameters needed
+            return std::make_unique<dsp::adapters::DifferentiatorStage>();
+        };
+
+        // Integrator stage (IIR leaky integrator)
+        m_stageFactories["integrator"] = [](const Napi::Object &params)
+        {
+            float alpha = 0.99f; // Default leakage coefficient
+
+            if (params.Has("alpha"))
+            {
+                alpha = params.Get("alpha").As<Napi::Number>().FloatValue();
+
+                if (alpha <= 0.0f || alpha > 1.0f)
+                {
+                    throw std::invalid_argument("Integrator alpha must be in range (0, 1]");
+                }
+            }
+
+            return std::make_unique<dsp::adapters::IntegratorStage>(alpha);
+        };
+
+        // SNR stage (Signal-to-Noise Ratio in dB)
+        m_stageFactories["snr"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("windowSize"))
+            {
+                throw std::invalid_argument("SNR stage requires 'windowSize' parameter");
+            }
+
+            size_t window_size = params.Get("windowSize").As<Napi::Number>().Uint32Value();
+
+            if (window_size == 0)
+            {
+                throw std::invalid_argument("SNR windowSize must be greater than 0");
+            }
+
+            return std::make_unique<dsp::adapters::SnrStage>(window_size);
+        };
     }
 
     /**
@@ -711,6 +936,13 @@ namespace dsp
                         currentBuffer = outputBuffer;
                         currentSize = actualOutputSize;
                         usingTempBuffer = true;
+
+                        // Update channel count if this stage changes it (e.g., ChannelSelector)
+                        int outputChannels = stage->getOutputChannels();
+                        if (outputChannels > 0)
+                        {
+                            m_channels = outputChannels;
+                        }
 
                         // Adjust timestamps for resampled data
                         if (m_timestamps != nullptr)
@@ -1114,6 +1346,7 @@ namespace dsp
 namespace dsp
 {
     void InitFftBindings(Napi::Env env, Napi::Object exports);
+    Napi::Object InitMatrixBindings(Napi::Env env, Napi::Object exports);
     namespace bindings
     {
         Napi::Object InitUtilityBindings(Napi::Env env, Napi::Object exports);
@@ -1131,6 +1364,9 @@ Napi::Object InitAll(Napi::Env env, Napi::Object exports)
 
     // Initialize FIR/IIR filter bindings
     dsp::InitFilterBindings(env, exports);
+
+    // Initialize matrix analysis bindings (PCA, ICA, Whitening)
+    dsp::InitMatrixBindings(env, exports);
 
     // Initialize utility functions (dot product, etc.)
     dsp::bindings::InitUtilityBindings(env, exports);

@@ -28,6 +28,15 @@ import type {
   SampleBatch,
   TapCallback,
   PipelineStateSummary,
+  BeamformerWeightsResult,
+  CspResult,
+  GscPreprocessorParams,
+  ChannelSelectorParams,
+  ChannelSelectParams,
+  ChannelMergeParams,
+  ClipDetectionParams,
+  PeakDetectionParams,
+  CspTransformParams,
 } from "./types.js";
 import { CircularLogBuffer } from "./CircularLogBuffer.js";
 import { DriftDetector } from "./DriftDetector.js";
@@ -1052,6 +1061,822 @@ class DspProcessor {
   }
 
   /**
+   * Apply pre-trained PCA transformation to pipeline in real-time.
+   *
+   * **Prerequisites**: Must first train PCA using `calculatePca()` on representative data.
+   *
+   * Applies transformation: `y = W^T * (x - mean)` where W is the PCA matrix.
+   *
+   * @param params - PCA transformation parameters from calculatePca()
+   * @param params.pcaMatrix - Pre-trained PCA matrix (from calculatePca)
+   * @param params.mean - Mean vector (from calculatePca)
+   * @param params.numChannels - Number of input channels
+   * @param params.numComponents - Number of output components (≤ numChannels for reduction)
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If required parameters are missing or invalid
+   * @throws {Error} If matrix dimensions don't match
+   *
+   * @example
+   * // Train PCA offline
+   * const trainingData = new Float32Array(3000); // 3 channels, 1000 samples
+   * const pca = calculatePca(trainingData, 3);
+   *
+   * // Apply in real-time pipeline
+   * const pipeline = createDspPipeline();
+   * pipeline.PcaTransform({
+   *   pcaMatrix: pca.pcaMatrix,
+   *   mean: pca.mean,
+   *   numChannels: 3,
+   *   numComponents: 3  // Keep all components
+   * });
+   *
+   * @example
+   * // Dimensionality reduction: 8 → 3 channels
+   * const pca8 = calculatePca(eightChannelData, 8);
+   * pipeline.PcaTransform({
+   *   pcaMatrix: pca8.pcaMatrix,
+   *   mean: pca8.mean,
+   *   numChannels: 8,
+   *   numComponents: 3  // Reduce to 3 channels
+   * });
+   */
+  PcaTransform(params: PcaTransformParams): this {
+    if (!(params.pcaMatrix instanceof Float32Array)) {
+      throw new TypeError("PcaTransform: pcaMatrix must be a Float32Array");
+    }
+    if (!(params.mean instanceof Float32Array)) {
+      throw new TypeError("PcaTransform: mean must be a Float32Array");
+    }
+    if (!Number.isInteger(params.numChannels) || params.numChannels <= 0) {
+      throw new TypeError(
+        "PcaTransform: numChannels must be a positive integer"
+      );
+    }
+    if (!Number.isInteger(params.numComponents) || params.numComponents <= 0) {
+      throw new TypeError(
+        "PcaTransform: numComponents must be a positive integer"
+      );
+    }
+    if (params.numComponents > params.numChannels) {
+      throw new RangeError(
+        "PcaTransform: numComponents cannot exceed numChannels"
+      );
+    }
+
+    this.nativeInstance.addStage("pcaTransform", params);
+    this.stages.push(
+      `pcaTransform:${params.numChannels}→${params.numComponents}`
+    );
+    return this;
+  }
+
+  /**
+   * Apply pre-trained ICA unmixing to pipeline in real-time.
+   *
+   * **Prerequisites**: Must first train ICA using `calculateIca()` on representative mixed data.
+   *
+   * Separates mixed signals into independent components.
+   *
+   * @param params - ICA transformation parameters from calculateIca()
+   * @param params.icaMatrix - Pre-trained ICA unmixing matrix (from calculateIca)
+   * @param params.mean - Mean vector (from calculateIca)
+   * @param params.numChannels - Number of input channels (mixed signals)
+   * @param params.numComponents - Number of output components (separated sources)
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If required parameters are missing or invalid
+   * @throws {Error} If matrix dimensions don't match
+   *
+   * @example
+   * // Train ICA offline on mixed EEG data
+   * const mixedEeg = new Float32Array(8000); // 8 channels
+   * const ica = calculateIca(mixedEeg, 8);
+   *
+   * // Apply in real-time pipeline
+   * const pipeline = createDspPipeline();
+   * pipeline.IcaTransform({
+   *   icaMatrix: ica.icaMatrix,
+   *   mean: ica.mean,
+   *   numChannels: 8,
+   *   numComponents: 8  // Separate into 8 independent components
+   * });
+   *
+   * @example
+   * // Audio source separation
+   * const mixedAudio = new Float32Array(9000); // 3 mics
+   * const ica = calculateIca(mixedAudio, 3);
+   *
+   * if (ica.converged) {
+   *   pipeline.IcaTransform({
+   *     icaMatrix: ica.icaMatrix,
+   *     mean: ica.mean,
+   *     numChannels: 3,
+   *     numComponents: 3
+   *   });
+   * }
+   */
+  IcaTransform(params: IcaTransformParams): this {
+    if (!(params.icaMatrix instanceof Float32Array)) {
+      throw new TypeError("IcaTransform: icaMatrix must be a Float32Array");
+    }
+    if (!(params.mean instanceof Float32Array)) {
+      throw new TypeError("IcaTransform: mean must be a Float32Array");
+    }
+    if (!Number.isInteger(params.numChannels) || params.numChannels <= 0) {
+      throw new TypeError(
+        "IcaTransform: numChannels must be a positive integer"
+      );
+    }
+    if (!Number.isInteger(params.numComponents) || params.numComponents <= 0) {
+      throw new TypeError(
+        "IcaTransform: numComponents must be a positive integer"
+      );
+    }
+
+    this.nativeInstance.addStage("icaTransform", params);
+    this.stages.push(`icaTransform:${params.numChannels}ch`);
+    return this;
+  }
+
+  /**
+   * Apply pre-trained whitening transformation to pipeline in real-time.
+   *
+   * **Prerequisites**: Must first train whitening using `calculateWhitening()` on representative data.
+   *
+   * Transforms data to have identity covariance (decorrelates and normalizes).
+   * Often used as preprocessing before ICA or for ML feature normalization.
+   *
+   * @param params - Whitening transformation parameters from calculateWhitening()
+   * @param params.whiteningMatrix - Pre-trained whitening matrix (from calculateWhitening)
+   * @param params.mean - Mean vector (from calculateWhitening)
+   * @param params.numChannels - Number of input channels
+   * @param params.numComponents - Number of output components (typically same as numChannels)
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If required parameters are missing or invalid
+   * @throws {Error} If matrix dimensions don't match
+   *
+   * @example
+   * // Train whitening offline
+   * const sensorData = new Float32Array(4000); // 4 channels
+   * const whitening = calculateWhitening(sensorData, 4);
+   *
+   * // Apply in real-time pipeline
+   * const pipeline = createDspPipeline();
+   * pipeline.WhiteningTransform({
+   *   whiteningMatrix: whitening.whiteningMatrix,
+   *   mean: whitening.mean,
+   *   numChannels: 4,
+   *   numComponents: 4
+   * });
+   *
+   * @example
+   * // Preprocessing chain: Whitening → ICA
+   * const data = new Float32Array(5000);
+   * const whitening = calculateWhitening(data, 5);
+   * const ica = calculateIca(data, 5);
+   *
+   * pipeline
+   *   .WhiteningTransform({
+   *     whiteningMatrix: whitening.whiteningMatrix,
+   *     mean: whitening.mean,
+   *     numChannels: 5,
+   *     numComponents: 5
+   *   })
+   *   .IcaTransform({
+   *     icaMatrix: ica.icaMatrix,
+   *     mean: ica.mean,
+   *     numChannels: 5,
+   *     numComponents: 5
+   *   });
+   */
+  WhiteningTransform(params: WhiteningTransformParams): this {
+    if (!(params.whiteningMatrix instanceof Float32Array)) {
+      throw new TypeError(
+        "WhiteningTransform: whiteningMatrix must be a Float32Array"
+      );
+    }
+    if (!(params.mean instanceof Float32Array)) {
+      throw new TypeError("WhiteningTransform: mean must be a Float32Array");
+    }
+    if (!Number.isInteger(params.numChannels) || params.numChannels <= 0) {
+      throw new TypeError(
+        "WhiteningTransform: numChannels must be a positive integer"
+      );
+    }
+    if (!Number.isInteger(params.numComponents) || params.numComponents <= 0) {
+      throw new TypeError(
+        "WhiteningTransform: numComponents must be a positive integer"
+      );
+    }
+
+    this.nativeInstance.addStage("whiteningTransform", params);
+    this.stages.push(`whiteningTransform:${params.numChannels}ch`);
+    return this;
+  }
+
+  /**
+   * Add GSC (Generalized Sidelobe Canceler) preprocessor for adaptive beamforming.
+   *
+   * Converts N-channel microphone array into 2 channels for LMS/RLS adaptive filtering:
+   * - Channel 0: Noise reference (blocking matrix output)
+   * - Channel 1: Desired signal (steering weights output)
+   *
+   * **Must be followed by LmsFilter or RlsFilter** to complete adaptive beamforming.
+   *
+   * **Prerequisites**: Use `calculateBeamformerWeights()` to compute weights first.
+   *
+   * @param params - GSC configuration from calculateBeamformerWeights()
+   * @param params.numChannels - Number of input microphone channels
+   * @param params.steeringWeights - Steering weights (from calculateBeamformerWeights)
+   * @param params.blockingMatrix - Blocking matrix (from calculateBeamformerWeights)
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If required parameters are missing or invalid
+   * @throws {Error} If matrix dimensions don't match numChannels
+   *
+   * @example
+   * // Complete adaptive beamforming pipeline for conference call
+   * const bf = calculateBeamformerWeights(8, "linear", 0.0);
+   *
+   * const pipeline = createDspPipeline();
+   * pipeline
+   *   .GscPreprocessor({
+   *     numChannels: 8,
+   *     steeringWeights: bf.steeringWeights,
+   *     blockingMatrix: bf.blockingMatrix
+   *   })
+   *   .LmsFilter({
+   *     numTaps: 64,
+   *     learningRate: 0.005,
+   *     normalized: true
+   *   });
+   *
+   * // Process 8-channel microphone data
+   * const micData = new Float32Array(800); // 100 samples × 8 channels
+   * const result = await pipeline.process(micData, 100, 8);
+   * // result.output: 1-channel cleaned audio
+   *
+   * @example
+   * // Acoustic monitoring with RLS (faster convergence)
+   * const bf = calculateBeamformerWeights(4, "circular", 45.0);
+   *
+   * pipeline
+   *   .HighpassFilter({ cutoff: 100 })  // Remove DC offset
+   *   .GscPreprocessor({
+   *     numChannels: 4,
+   *     steeringWeights: bf.steeringWeights,
+   *     blockingMatrix: bf.blockingMatrix
+   *   })
+   *   .RlsFilter({
+   *     numTaps: 32,
+   *     lambda: 0.995,
+   *     delta: 1.0
+   *   });
+   *
+   * @see calculateBeamformerWeights
+   * @see LmsFilter
+   * @see RlsFilter
+   */
+  GscPreprocessor(params: GscPreprocessorParams): this {
+    if (!Number.isInteger(params.numChannels) || params.numChannels < 2) {
+      throw new RangeError("GscPreprocessor: numChannels must be >= 2");
+    }
+    if (!(params.steeringWeights instanceof Float32Array)) {
+      throw new TypeError(
+        "GscPreprocessor: steeringWeights must be a Float32Array"
+      );
+    }
+    if (!(params.blockingMatrix instanceof Float32Array)) {
+      throw new TypeError(
+        "GscPreprocessor: blockingMatrix must be a Float32Array"
+      );
+    }
+    if (params.steeringWeights.length !== params.numChannels) {
+      throw new Error(
+        `GscPreprocessor: steeringWeights length (${params.steeringWeights.length}) ` +
+          `must equal numChannels (${params.numChannels})`
+      );
+    }
+    const expectedBlockingSize = params.numChannels * (params.numChannels - 1);
+    if (params.blockingMatrix.length !== expectedBlockingSize) {
+      throw new Error(
+        `GscPreprocessor: blockingMatrix length (${params.blockingMatrix.length}) ` +
+          `must equal numChannels × (numChannels-1) (${expectedBlockingSize})`
+      );
+    }
+
+    this.nativeInstance.addStage("gscPreprocessor", params);
+    this.stages.push(`gscPreprocessor:${params.numChannels}ch→2ch`);
+    return this;
+  }
+
+  /**
+   * Select a subset of channels from multi-channel input.
+   *
+   * Extracts the first `numOutputChannels` from the input, discarding the rest.
+   * This is a **resizing stage** that reduces the effective channel count.
+   *
+   * **Use case**: After GSC Preprocessor, extract only the 2 active channels
+   * before feeding to LMS/RLS (which requires exactly 2 channels).
+   *
+   * @param params - Channel selection parameters
+   * @param params.numInputChannels - Number of input channels
+   * @param params.numOutputChannels - Number of channels to keep (1 to numInputChannels)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // After GSC (8 channels → 2 active channels in buffer)
+   * pipeline
+   *   .GscPreprocessor({ numChannels: 8, ... })
+   *   .ChannelSelector({ numInputChannels: 8, numOutputChannels: 2 })
+   *   .LmsFilter({ numTaps: 32, learningRate: 0.01 });
+   */
+  ChannelSelector(params: ChannelSelectorParams): this {
+    if (
+      !Number.isInteger(params.numInputChannels) ||
+      params.numInputChannels <= 0
+    ) {
+      throw new RangeError(
+        "ChannelSelector: numInputChannels must be a positive integer"
+      );
+    }
+    if (
+      !Number.isInteger(params.numOutputChannels) ||
+      params.numOutputChannels <= 0 ||
+      params.numOutputChannels > params.numInputChannels
+    ) {
+      throw new RangeError(
+        `ChannelSelector: numOutputChannels must be in range [1, ${params.numInputChannels}], got ${params.numOutputChannels}`
+      );
+    }
+
+    this.nativeInstance.addStage("channelSelector", params);
+    this.stages.push(
+      `channelSelector:${params.numInputChannels}ch→${params.numOutputChannels}ch`
+    );
+    return this;
+  }
+
+  /**
+   * Add Channel Select stage (select channels by indices).
+   *
+   * Selects specific channels by index, allowing reordering and duplication.
+   * This is a resizing stage that can increase, decrease, or maintain channel count.
+   *
+   * @param params Configuration with channels array and numInputChannels
+   * @returns this pipeline for chaining
+   * @example
+   * // Select channels 0, 3, 7 from 8-channel input
+   * pipeline.ChannelSelect({ channels: [0, 3, 7], numInputChannels: 8 });
+   * @example
+   * // Swap stereo channels
+   * pipeline.ChannelSelect({ channels: [1, 0], numInputChannels: 2 });
+   * @example
+   * // Duplicate channel 0 (mono to stereo)
+   * pipeline.ChannelSelect({ channels: [0, 0], numInputChannels: 1 });
+   */
+  ChannelSelect(params: ChannelSelectParams): this {
+    if (!Array.isArray(params.channels) || params.channels.length === 0) {
+      throw new Error("ChannelSelect: channels must be a non-empty array");
+    }
+    if (
+      !Number.isInteger(params.numInputChannels) ||
+      params.numInputChannels <= 0
+    ) {
+      throw new RangeError(
+        "ChannelSelect: numInputChannels must be a positive integer"
+      );
+    }
+
+    // Validate channel indices
+    for (let i = 0; i < params.channels.length; i++) {
+      const ch = params.channels[i];
+      if (
+        typeof ch !== "number" ||
+        !Number.isInteger(ch) ||
+        ch < 0 ||
+        ch >= params.numInputChannels
+      ) {
+        throw new RangeError(
+          `ChannelSelect: channel index ${ch} out of range [0, ${
+            params.numInputChannels - 1
+          }]`
+        );
+      }
+    }
+
+    this.nativeInstance.addStage("channelSelect", params);
+    this.stages.push(`channelSelect:[${params.channels.join(",")}]`);
+    return this;
+  }
+
+  /**
+   * Add Channel Merge stage (merge/duplicate channels).
+   *
+   * Maps input channels to output channels according to mapping array.
+   * Each element in mapping specifies which input channel feeds that output position.
+   * This is a resizing stage that can increase, decrease, or maintain channel count.
+   *
+   * @param params Configuration with mapping array and numInputChannels
+   * @returns this pipeline for chaining
+   * @example
+   * // Mono to stereo (duplicate channel 0)
+   * pipeline.ChannelMerge({ mapping: [0, 0], numInputChannels: 1 });
+   * @example
+   * // 3-channel to 6-channel by duplicating each
+   * pipeline.ChannelMerge({ mapping: [0, 0, 1, 1, 2, 2], numInputChannels: 3 });
+   * @example
+   * // Custom routing: [A, B, C] -> [A, C, B, A]
+   * pipeline.ChannelMerge({ mapping: [0, 2, 1, 0], numInputChannels: 3 });
+   */
+  ChannelMerge(params: ChannelMergeParams): this {
+    if (!Array.isArray(params.mapping) || params.mapping.length === 0) {
+      throw new Error("ChannelMerge: mapping must be a non-empty array");
+    }
+    if (
+      !Number.isInteger(params.numInputChannels) ||
+      params.numInputChannels <= 0
+    ) {
+      throw new RangeError(
+        "ChannelMerge: numInputChannels must be a positive integer"
+      );
+    }
+
+    // Validate mapping indices
+    for (let i = 0; i < params.mapping.length; i++) {
+      const ch = params.mapping[i];
+      if (
+        typeof ch !== "number" ||
+        !Number.isInteger(ch) ||
+        ch < 0 ||
+        ch >= params.numInputChannels
+      ) {
+        throw new RangeError(
+          `ChannelMerge: mapping index ${ch} out of range [0, ${
+            params.numInputChannels - 1
+          }]`
+        );
+      }
+    }
+
+    this.nativeInstance.addStage("channelMerge", params);
+    this.stages.push(
+      `channelMerge:${params.numInputChannels}ch→${params.mapping.length}ch`
+    );
+    return this;
+  }
+
+  /**
+   * Detect clipping (signal saturation) in the input stream.
+   *
+   * Outputs a binary indicator (1.0 or 0.0) showing where samples exceed
+   * the specified threshold. Useful for:
+   * - Audio clipping detection (overload prevention)
+   * - ADC saturation detection
+   * - Signal quality monitoring
+   * - Data acquisition QC
+   *
+   * @param params - Clip detection parameters
+   * @param params.threshold - Absolute amplitude threshold (must be > 0)
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If threshold is missing or invalid
+   * @throws {RangeError} If threshold <= 0
+   *
+   * @example
+   * // Detect audio clipping at 95% full scale
+   * pipeline.ClipDetection({ threshold: 0.95 });
+   *
+   * @example
+   * // Monitor ADC saturation for 16-bit signal (-32768 to +32767)
+   * pipeline.ClipDetection({ threshold: 32000 });
+   */
+  ClipDetection(params: ClipDetectionParams): this {
+    if (typeof params.threshold !== "number" || params.threshold <= 0) {
+      throw new RangeError("ClipDetection: threshold must be > 0");
+    }
+
+    this.nativeInstance.addStage("clipDetection", params);
+    this.stages.push(`clipDetection:${params.threshold}`);
+    return this;
+  }
+
+  /**
+   * Detect peaks (local maxima) in the input stream.
+   *
+   * Identifies peaks using three-point comparison: a peak is detected when
+   * the previous sample is greater than both its neighbors AND exceeds
+   * the threshold. Outputs 1.0 at peak locations, 0.0 elsewhere.
+   *
+   * **Use Cases:**
+   * - Heart rate detection (R-peaks in ECG)
+   * - Event detection in sensor data
+   * - Tempo/beat detection in audio
+   * - Spike detection in neural recordings
+   *
+   * @param params - Peak detection parameters
+   * @param params.threshold - Minimum peak amplitude (must be >= 0)
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If threshold is missing or invalid
+   * @throws {RangeError} If threshold < 0
+   *
+   * @example
+   * // Detect R-peaks in ECG above 0.5mV
+   * pipeline.PeakDetection({ threshold: 0.5 });
+   *
+   * @example
+   * // Find all local maxima (no amplitude threshold)
+   * pipeline.PeakDetection({ threshold: 0.0 });
+   */
+  PeakDetection(params: PeakDetectionParams): this {
+    if (typeof params.threshold !== "number" || params.threshold < 0) {
+      throw new RangeError("PeakDetection: threshold must be >= 0");
+    }
+
+    this.nativeInstance.addStage("peakDetection", params);
+    this.stages.push(`peakDetection:${params.threshold}`);
+    return this;
+  }
+
+  /**
+   * Compute the discrete derivative of the signal.
+   *
+   * Implements finite difference: y[n] = x[n] - x[n-1]
+   * Equivalent to an FIR filter with coefficients [1, -1].
+   *
+   * **Use Cases:**
+   * - Edge detection in signals
+   * - Velocity calculation from position data
+   * - Change detection in sensor readings
+   * - High-pass filtering (DC removal)
+   * - Rate of change analysis
+   *
+   * **Note:** Amplifies high-frequency noise. Consider applying a low-pass
+   * filter before differentiation for noisy signals.
+   *
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Compute velocity from position
+   * pipeline.Differentiator();
+   *
+   * @example
+   * // Edge detection with noise reduction
+   * pipeline
+   *   .ButterworthLowpass({ cutoff: 50, order: 4, sampleRate: 1000 })
+   *   .Differentiator();
+   */
+  Differentiator(): this {
+    this.nativeInstance.addStage("differentiator", {});
+    this.stages.push("differentiator");
+    return this;
+  }
+
+  /**
+   * Apply leaky integration (accumulation) using IIR filter.
+   *
+   * Implements: y[n] = x[n] + α * y[n-1]
+   * Transfer function: H(z) = 1 / (1 - α*z^-1)
+   *
+   * The integrator accumulates signal values over time with controllable leakage.
+   * α (alpha) controls the leakage rate:
+   * - α = 1.0: Perfect integration (no leakage, infinite DC gain)
+   * - α = 0.99: Slight leakage (DC gain ≈ 100)
+   * - α = 0.9: More leakage (DC gain = 10)
+   *
+   * @param params - Integrator parameters (optional, defaults to α = 0.99)
+   * @param params.alpha - Leakage coefficient in range (0, 1]. Default: 0.99
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If alpha is outside valid range (0, 1]
+   *
+   * @example
+   * // Accelerometer → velocity integration
+   * const pipeline = createDspPipeline();
+   * pipeline
+   *   .Integrator({ alpha: 0.99 })  // Slight leakage prevents drift
+   *   .process(accelerometerData, { channels: 3, sampleRate: 100 });
+   *
+   * @example
+   * // Envelope detection after rectification
+   * pipeline
+   *   .Rectify({ mode: "full" })
+   *   .Integrator({ alpha: 0.95 })  // Smooth envelope
+   *   .process(audioSignal, { channels: 1, sampleRate: 44100 });
+   *
+   * @example
+   * // Low-pass smoothing with adjustable time constant
+   * pipeline
+   *   .Integrator({ alpha: 0.9 })  // τ = 1/(1-α) = 10 samples
+   *   .process(noisySignal, { channels: 1, sampleRate: 1000 });
+   */
+  Integrator(params: { alpha?: number } = {}): this {
+    const alpha = params.alpha ?? 0.99;
+
+    if (alpha <= 0.0 || alpha > 1.0) {
+      throw new TypeError(
+        `Integrator alpha must be in range (0, 1], got: ${alpha}`
+      );
+    }
+
+    this.nativeInstance.addStage("integrator", { alpha });
+    this.stages.push(`integrator:α=${alpha.toFixed(3)}`);
+    return this;
+  }
+
+  /**
+   * Compute Signal-to-Noise Ratio (SNR) in dB from 2-channel input.
+   *
+   * **Requirements**: Exactly 2 input channels
+   * - Channel 0: Signal (clean signal or signal+noise)
+   * - Channel 1: Noise reference
+   *
+   * **Output**: Single channel containing SNR in dB
+   * Formula: SNR_dB = 10 * log10(signal_power / noise_power)
+   *
+   * Uses dual RMS filters to compute running power estimates.
+   * Output is clamped to [-100, 100] dB to avoid infinities.
+   *
+   * @param params - SNR parameters
+   * @param params.windowSize - Window size in samples for RMS computation
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If windowSize is missing or <= 0
+   * @throws {Error} If input doesn't have exactly 2 channels during process()
+   *
+   * @example
+   * // Audio quality monitoring (100ms window at 16kHz)
+   * const pipeline = createDspPipeline();
+   * const twoChannelAudio = new Float32Array([
+   *   1.0, 0.1,  // Sample 0: signal=1.0, noise=0.1
+   *   0.8, 0.15, // Sample 1: signal=0.8, noise=0.15
+   *   0.9, 0.12  // Sample 2: signal=0.9, noise=0.12
+   * ]);
+   * pipeline
+   *   .Snr({ windowSize: 1600 }) // 100ms at 16kHz
+   *   .process(twoChannelAudio, { channels: 2, sampleRate: 16000 });
+   * // Output: Single channel with SNR values in dB
+   *
+   * @example
+   * // Speech enhancement validation
+   * const cleanSpeech = recordCleanSpeech();
+   * const noisyChannel = addNoise(cleanSpeech);
+   * const noiseReference = recordNoise();
+   * const dualChannel = interleave(noisyChannel, noiseReference);
+   * pipeline
+   *   .Snr({ windowSize: 400 }) // 50ms at 8kHz
+   *   .process(dualChannel, { channels: 2, sampleRate: 8000 });
+   *
+   * @example
+   * // Adaptive filter performance monitoring
+   * pipeline
+   *   .Snr({ windowSize: 1024 })
+   *   .Tap((result) => {
+   *     const avgSnr = result.reduce((a, b) => a + b, 0) / result.length;
+   *     console.log(`Average SNR: ${avgSnr.toFixed(2)} dB`);
+   *   })
+   *   .process(adaptiveFilterOutput, { channels: 2, sampleRate: 48000 });
+   */
+  Snr(params: { windowSize: number }): this {
+    if (!params.windowSize || params.windowSize <= 0) {
+      throw new TypeError(
+        `SNR windowSize must be greater than 0, got: ${params.windowSize}`
+      );
+    }
+
+    this.nativeInstance.addStage("snr", { windowSize: params.windowSize });
+    this.stages.push(`snr:win=${params.windowSize}`);
+    return this;
+  }
+
+  /**
+   * Apply pre-trained CSP (Common Spatial Patterns) filters for BCI/EEG classification.
+   *
+   * **Prerequisites**: Must first train CSP using `calculateCommonSpatialPatterns()`
+   * on labeled class data (e.g., left hand vs right hand motor imagery).
+   *
+   * CSP transforms multi-channel EEG into spatially filtered components that
+   * maximize class separability. Essential for motor imagery BCI, P300, SSVEP.
+   *
+   * @param params - CSP transformation parameters from calculateCommonSpatialPatterns()
+   * @param params.cspMatrix - Pre-trained CSP filters (from calculateCommonSpatialPatterns)
+   * @param params.mean - Mean vector (from calculateCommonSpatialPatterns)
+   * @param params.numChannels - Number of input EEG channels
+   * @param params.numFilters - Number of output CSP components
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If required parameters are missing or invalid
+   * @throws {Error} If matrix dimensions don't match
+   *
+   * @example
+   * // Motor imagery BCI: Left hand vs right hand classification
+   *
+   * // 1. Train CSP offline on labeled trials
+   * const leftHandTrials = new Float32Array(400 * 8); // 50 trials × 8 channels
+   * const rightHandTrials = new Float32Array(400 * 8);
+   * // ... collect training data ...
+   *
+   * const csp = calculateCommonSpatialPatterns(
+   *   leftHandTrials,
+   *   rightHandTrials,
+   *   8,  // 8 EEG channels
+   *   4   // Top 4 most discriminative filters
+   * );
+   *
+   * // 2. Apply in real-time classification pipeline
+   * const pipeline = createDspPipeline();
+   * pipeline
+   *   .BandpassFilter({ lowCutoff: 8, highCutoff: 30 })  // Motor imagery band
+   *   .CspTransform({
+   *     cspMatrix: csp.cspMatrix,
+   *     mean: csp.mean,
+   *     numChannels: 8,
+   *     numFilters: 4
+   *   })
+   *   .MovingVariance({ mode: "moving", windowSize: 100 })
+   *   .MovingAverage({ mode: "moving", windowSize: 50 });
+   *
+   * // 3. Process live EEG stream
+   * const liveEeg = new Float32Array(80); // 10 samples × 8 channels
+   * const result = await pipeline.process(liveEeg, 10, 8);
+   * // result.output: 4-channel CSP features with variance
+   * // → Feed to classifier (SVM, LDA, etc.)
+   *
+   * @example
+   * // P300 speller: Target vs non-target ERP classification
+   * const targetErps = new Float32Array(50 * 16 * 200);
+   * const nonTargetErps = new Float32Array(200 * 16 * 200);
+   *
+   * const csp = calculateCommonSpatialPatterns(
+   *   targetErps,
+   *   nonTargetErps,
+   *   16,
+   *   6
+   * );
+   *
+   * pipeline
+   *   .BandpassFilter({ lowCutoff: 0.5, highCutoff: 10 })  // P300 band
+   *   .CspTransform({
+   *     cspMatrix: csp.cspMatrix,
+   *     mean: csp.mean,
+   *     numChannels: 16,
+   *     numFilters: 6
+   *   })
+   *   .Downsample({ factor: 4 });  // Reduce data rate
+   *
+   * @see calculateCommonSpatialPatterns
+   * @see MatrixTransformStage
+   */
+  CspTransform(params: CspTransformParams): this {
+    if (!(params.cspMatrix instanceof Float32Array)) {
+      throw new TypeError("CspTransform: cspMatrix must be a Float32Array");
+    }
+    if (!(params.mean instanceof Float32Array)) {
+      throw new TypeError("CspTransform: mean must be a Float32Array");
+    }
+    if (!Number.isInteger(params.numChannels) || params.numChannels <= 0) {
+      throw new TypeError(
+        "CspTransform: numChannels must be a positive integer"
+      );
+    }
+    if (!Number.isInteger(params.numFilters) || params.numFilters <= 0) {
+      throw new TypeError(
+        "CspTransform: numFilters must be a positive integer"
+      );
+    }
+    if (params.numFilters > params.numChannels) {
+      throw new RangeError(
+        "CspTransform: numFilters cannot exceed numChannels"
+      );
+    }
+    if (params.mean.length !== params.numChannels) {
+      throw new Error(
+        `CspTransform: mean length (${params.mean.length}) must equal numChannels (${params.numChannels})`
+      );
+    }
+    const expectedMatrixSize = params.numChannels * params.numFilters;
+    if (params.cspMatrix.length !== expectedMatrixSize) {
+      throw new Error(
+        `CspTransform: cspMatrix length (${params.cspMatrix.length}) ` +
+          `must equal numChannels × numFilters (${expectedMatrixSize})`
+      );
+    }
+
+    // CSP uses MatrixTransformStage internally with "csp" type
+    this.nativeInstance.addStage("pcaTransform", {
+      pcaMatrix: params.cspMatrix, // Reuse PCA stage with CSP matrix
+      mean: params.mean,
+      numChannels: params.numChannels,
+      numComponents: params.numFilters,
+    });
+    this.stages.push(`cspTransform:${params.numChannels}→${params.numFilters}`);
+    return this;
+  }
+
+  /**
    * Add a Discrete Wavelet Transform (DWT) stage to the pipeline
    * Decomposes signal into approximation and detail coefficients
    * Output format: [approximation_coeffs, detail_coefficients]
@@ -1882,3 +2707,513 @@ export function createDspPipeline(config?: RedisConfig): DspProcessor {
 }
 
 export { DspProcessor };
+
+// ============================================================================
+// Matrix Analysis Functions (PCA, ICA, Whitening)
+// ============================================================================
+
+import type {
+  PcaResult,
+  IcaResult,
+  WhiteningResult,
+  PcaTransformParams,
+  IcaTransformParams,
+  WhiteningTransformParams,
+} from "./types.js";
+
+/**
+ * Calculate PCA (Principal Component Analysis) transformation matrix from training data.
+ *
+ * PCA finds orthogonal directions of maximum variance in multi-channel data.
+ * Use for dimensionality reduction, feature extraction, and noise reduction.
+ *
+ * **Workflow**:
+ * 1. **Train**: Call this function with representative training data
+ * 2. **Apply**: Use returned matrix with `pipeline.PcaTransform()` for real-time processing
+ * 3. **Reduce**: Keep only top N components for dimensionality reduction
+ *
+ * @param interleavedData - Multi-channel training data (interleaved: [ch0_s0, ch1_s0, ch0_s1, ch1_s1, ...])
+ * @param numChannels - Number of channels in the data
+ * @returns PCA result with transformation matrix, mean, eigenvalues, and explained variance
+ *
+ * @throws {TypeError} If data length is not divisible by numChannels
+ * @throws {TypeError} If insufficient samples (need at least numChannels samples)
+ * @throws {Error} If eigenvalue decomposition fails
+ *
+ * @example
+ * // 3-channel EMG data, 1000 samples per channel
+ * const trainingData = new Float32Array(3000); // Interleaved
+ * // ... fill with training data ...
+ *
+ * const pca = calculatePca(trainingData, 3);
+ * console.log('Explained variance:', pca.explainedVariance);
+ * // Example output: [0.65, 0.25, 0.10] - first PC explains 65% of variance
+ *
+ * // Apply to real-time pipeline (keep all 3 components)
+ * pipeline.PcaTransform({
+ *   pcaMatrix: pca.pcaMatrix,
+ *   mean: pca.mean,
+ *   numChannels: 3,
+ *   numComponents: 3
+ * });
+ *
+ * @example
+ * // Dimensionality reduction: 8 channels → 3 principal components
+ * const pca8ch = calculatePca(eightChannelData, 8);
+ *
+ * // Keep only top 3 components (e.g., 95% of variance)
+ * pipeline.PcaTransform({
+ *   pcaMatrix: pca8ch.pcaMatrix,
+ *   mean: pca8ch.mean,
+ *   numChannels: 8,
+ *   numComponents: 3  // Reduces to 3 channels
+ * });
+ *
+ * @example
+ * // EEG artifact removal: Remove components with low variance
+ * const pcaEeg = calculatePca(eegData, 16);
+ * console.log('Eigenvalues:', pcaEeg.eigenvalues);
+ *
+ * // Remove last 4 components (likely noise)
+ * pipeline.PcaTransform({
+ *   pcaMatrix: pcaEeg.pcaMatrix,
+ *   mean: pcaEeg.mean,
+ *   numChannels: 16,
+ *   numComponents: 12  // Keep 12 out of 16
+ * });
+ */
+export function calculatePca(
+  interleavedData: Float32Array,
+  numChannels: number
+): PcaResult {
+  if (!(interleavedData instanceof Float32Array)) {
+    throw new TypeError("calculatePca: interleavedData must be a Float32Array");
+  }
+  if (!Number.isInteger(numChannels) || numChannels <= 0) {
+    throw new TypeError("calculatePca: numChannels must be a positive integer");
+  }
+
+  return DspAddon.calculatePca(interleavedData, numChannels);
+}
+
+/**
+ * Calculate Whitening (ZCA) transformation matrix from training data.
+ *
+ * Whitening transforms data to have identity covariance matrix (decorrelates and normalizes).
+ * Essential preprocessing step before ICA. Also useful for machine learning feature normalization.
+ *
+ * **Workflow**:
+ * 1. **Train**: Call this function with representative training data
+ * 2. **Apply**: Use returned matrix with `pipeline.WhiteningTransform()` for real-time processing
+ *
+ * @param interleavedData - Multi-channel training data (interleaved)
+ * @param numChannels - Number of channels in the data
+ * @param regularization - Small value added to eigenvalues to prevent division by zero (default: 1e-5)
+ * @returns Whitening result with transformation matrix and mean
+ *
+ * @throws {TypeError} If data length is not divisible by numChannels
+ * @throws {TypeError} If insufficient samples
+ * @throws {Error} If eigenvalue decomposition fails
+ *
+ * @example
+ * // 4-channel sensor data
+ * const sensorData = new Float32Array(4000); // 1000 samples × 4 channels
+ * // ... fill with training data ...
+ *
+ * const whitening = calculateWhitening(sensorData, 4);
+ *
+ * // Apply to real-time pipeline
+ * pipeline.WhiteningTransform({
+ *   whiteningMatrix: whitening.whiteningMatrix,
+ *   mean: whitening.mean,
+ *   numChannels: 4,
+ *   numComponents: 4
+ * });
+ *
+ * @example
+ * // Use as preprocessing before ICA
+ * const whiten = calculateWhitening(mixedSignals, 5);
+ * const ica = calculateIca(mixedSignals, 5); // ICA automatically whitens internally
+ *
+ * // Apply whitening first, then ICA
+ * pipeline
+ *   .WhiteningTransform({
+ *     whiteningMatrix: whiten.whiteningMatrix,
+ *     mean: whiten.mean,
+ *     numChannels: 5,
+ *     numComponents: 5
+ *   })
+ *   .IcaTransform({
+ *     icaMatrix: ica.icaMatrix,
+ *     mean: ica.mean,
+ *     numChannels: 5,
+ *     numComponents: 5
+ *   });
+ *
+ * @example
+ * // Custom regularization for noisy data
+ * const whitening = calculateWhitening(noisyData, 3, 1e-3); // Higher regularization
+ */
+export function calculateWhitening(
+  interleavedData: Float32Array,
+  numChannels: number,
+  regularization: number = 1e-5
+): WhiteningResult {
+  if (!(interleavedData instanceof Float32Array)) {
+    throw new TypeError(
+      "calculateWhitening: interleavedData must be a Float32Array"
+    );
+  }
+  if (!Number.isInteger(numChannels) || numChannels <= 0) {
+    throw new TypeError(
+      "calculateWhitening: numChannels must be a positive integer"
+    );
+  }
+  if (regularization <= 0) {
+    throw new RangeError("calculateWhitening: regularization must be positive");
+  }
+
+  return DspAddon.calculateWhitening(
+    interleavedData,
+    numChannels,
+    regularization
+  );
+}
+
+/**
+ * Calculate ICA (Independent Component Analysis) unmixing matrix using FastICA algorithm.
+ *
+ * ICA separates mixed signals into statistically independent components.
+ * Use for blind source separation, artifact removal, and signal decomposition.
+ *
+ * **Important**: ICA internally performs whitening as a preprocessing step.
+ *
+ * **Workflow**:
+ * 1. **Train**: Call this function with representative mixed signal data
+ * 2. **Apply**: Use returned matrix with `pipeline.IcaTransform()` for real-time separation
+ * 3. **Analyze**: Inspect separated components to identify artifacts/sources
+ *
+ * @param interleavedData - Mixed multi-channel data (interleaved)
+ * @param numChannels - Number of channels (sources to separate)
+ * @param maxIterations - Maximum FastICA iterations (default: 200)
+ * @param tolerance - Convergence tolerance (default: 1e-4)
+ * @returns ICA result with unmixing matrix, mean, convergence status, and iterations count
+ *
+ * @throws {TypeError} If data length is not divisible by numChannels
+ * @throws {TypeError} If insufficient samples (need at least 5 × numChannels)
+ * @throws {Error} If whitening or ICA algorithm fails
+ *
+ * @example
+ * // EEG artifact removal: Separate eye blinks from brain signals
+ * const eegData = new Float32Array(8000); // 8 channels, 1000 samples
+ * // ... record EEG with eye blinks ...
+ *
+ * const ica = calculateIca(eegData, 8);
+ * console.log(`Converged: ${ica.converged} in ${ica.iterations} iterations`);
+ *
+ * // Apply to real-time pipeline
+ * pipeline.IcaTransform({
+ *   icaMatrix: ica.icaMatrix,
+ *   mean: ica.mean,
+ *   numChannels: 8,
+ *   numComponents: 8
+ * });
+ *
+ * // After processing, analyze components to identify artifact channels
+ * // Then reconstruct signal without artifact components
+ *
+ * @example
+ * // Audio source separation: Cocktail party problem
+ * const mixedAudio = new Float32Array(6000); // 3 microphones, 2000 samples
+ * // ... record 3 mixed audio signals ...
+ *
+ * const ica = calculateIca(mixedAudio, 3, 500); // More iterations for audio
+ *
+ * if (ica.converged) {
+ *   pipeline.IcaTransform({
+ *     icaMatrix: ica.icaMatrix,
+ *     mean: ica.mean,
+ *     numChannels: 3,
+ *     numComponents: 3  // Outputs 3 separated sources
+ *   });
+ * }
+ *
+ * @example
+ * // EMG channel decomposition
+ * const emgData = new Float32Array(20000); // 4 channels, 5000 samples
+ * const ica = calculateIca(emgData, 4, 200, 1e-4);
+ *
+ * if (!ica.converged) {
+ *   console.warn('ICA did not converge, try more samples or iterations');
+ * }
+ */
+export function calculateIca(
+  interleavedData: Float32Array,
+  numChannels: number,
+  maxIterations: number = 200,
+  tolerance: number = 1e-4
+): IcaResult {
+  if (!(interleavedData instanceof Float32Array)) {
+    throw new TypeError("calculateIca: interleavedData must be a Float32Array");
+  }
+  if (!Number.isInteger(numChannels) || numChannels <= 0) {
+    throw new TypeError("calculateIca: numChannels must be a positive integer");
+  }
+  if (!Number.isInteger(maxIterations) || maxIterations <= 0) {
+    throw new TypeError(
+      "calculateIca: maxIterations must be a positive integer"
+    );
+  }
+  if (tolerance <= 0) {
+    throw new RangeError("calculateIca: tolerance must be positive");
+  }
+
+  return DspAddon.calculateIca(
+    interleavedData,
+    numChannels,
+    maxIterations,
+    tolerance
+  );
+}
+
+/**
+ * Calculate beamformer steering weights and blocking matrix for GSC adaptive beamforming.
+ *
+ * The Generalized Sidelobe Canceler (GSC) is a powerful architecture that converts
+ * N-channel beamforming into a 2-channel adaptive filtering problem.
+ *
+ * **How it works**:
+ * 1. Steering weights: Focus beam on target direction (delay-and-sum)
+ * 2. Blocking matrix: Create N-1 noise-only references (target cancelled)
+ * 3. Combine with LMS/RLS: Adaptively suppress noise while preserving target
+ *
+ * **Array Geometries**:
+ * - `"linear"`: Uniform Linear Array (ULA) - most common for voice/speech
+ * - `"circular"`: Circular array - omnidirectional coverage
+ * - `"planar"`: 2D planar array - 3D spatial filtering
+ *
+ * **Element Spacing**:
+ * - Use 0.5 wavelengths (λ/2) to avoid spatial aliasing
+ * - For speech at 2 kHz: λ = 340m/s ÷ 2000Hz = 0.17m → spacing = 8.5cm
+ * - For ultrasound at 40 kHz: λ = 8.5mm → spacing = 4.25mm
+ *
+ * @param numChannels - Number of microphones/sensors (must be ≥ 2)
+ * @param arrayGeometry - Array type: "linear", "circular", or "planar"
+ * @param targetAngleDeg - Target direction in degrees (0° = broadside/front)
+ * @param elementSpacing - Spacing between elements in wavelengths (default: 0.5)
+ * @returns Object with steeringWeights, blockingMatrix, and metadata
+ *
+ * @throws {TypeError} If parameters are invalid
+ * @throws {RangeError} If numChannels < 2
+ *
+ * @example
+ * // Conference call system: 8-mic linear array, focus on speaker at front
+ * const bf = calculateBeamformerWeights(8, "linear", 0.0);
+ *
+ * pipeline
+ *   .GscPreprocessor({
+ *     numChannels: 8,
+ *     steeringWeights: bf.steeringWeights,
+ *     blockingMatrix: bf.blockingMatrix
+ *   })
+ *   .LmsFilter({ numTaps: 64, learningRate: 0.005 });
+ *
+ * @example
+ * // Acoustic monitoring: 4-mic circular array, track moving source
+ * let currentAngle = 0;
+ * setInterval(() => {
+ *   // Update beam direction every 100ms
+ *   const bf = calculateBeamformerWeights(4, "circular", currentAngle);
+ *   // ... update pipeline dynamically ...
+ *   currentAngle += 10; // Rotate beam
+ * }, 100);
+ *
+ * @example
+ * // Underwater sonar: planar array with custom spacing
+ * const bf = calculateBeamformerWeights(
+ *   16,
+ *   "planar",
+ *   45.0,  // 45° elevation
+ *   0.75   // 3λ/4 spacing for wideband signals
+ * );
+ *
+ * @see GscPreprocessor
+ * @see LmsFilter
+ * @see RlsFilter
+ */
+export function calculateBeamformerWeights(
+  numChannels: number,
+  arrayGeometry: "linear" | "circular" | "planar",
+  targetAngleDeg: number,
+  elementSpacing: number = 0.5
+): BeamformerWeightsResult {
+  if (!Number.isInteger(numChannels) || numChannels < 2) {
+    throw new RangeError(
+      "calculateBeamformerWeights: numChannels must be >= 2"
+    );
+  }
+  if (!["linear", "circular", "planar"].includes(arrayGeometry)) {
+    throw new TypeError(
+      "calculateBeamformerWeights: arrayGeometry must be 'linear', 'circular', or 'planar'"
+    );
+  }
+  if (typeof targetAngleDeg !== "number" || !isFinite(targetAngleDeg)) {
+    throw new TypeError(
+      "calculateBeamformerWeights: targetAngleDeg must be a finite number"
+    );
+  }
+  if (typeof elementSpacing !== "number" || elementSpacing <= 0) {
+    throw new RangeError(
+      "calculateBeamformerWeights: elementSpacing must be positive"
+    );
+  }
+
+  return DspAddon.calculateBeamformerWeights(
+    numChannels,
+    arrayGeometry,
+    targetAngleDeg,
+    elementSpacing
+  );
+}
+
+/**
+ * Calculate Common Spatial Patterns (CSP) for binary classification in BCI/EEG.
+ *
+ * CSP finds spatial filters that maximize the variance of one class while minimizing
+ * the variance of another class. This is the gold standard for motor imagery BCI.
+ *
+ * **How it works**:
+ * 1. Computes covariance matrices for each class
+ * 2. Solves generalized eigenvalue problem: Cov1·v = λ·Cov2·v
+ * 3. Returns filters sorted by discriminability (highest eigenvalues first)
+ * 4. Apply filters using MatrixTransformStage in real-time pipeline
+ *
+ * **Use Cases**:
+ * - **Motor Imagery BCI**: Left hand vs right hand, foot vs rest
+ * - **P300 Speller**: Target vs non-target ERP classification
+ * - **SSVEP**: Different frequency responses (12 Hz vs 15 Hz stimulation)
+ * - **Sleep Staging**: Delta waves (deep sleep) vs alpha waves (awake)
+ *
+ * **Best Practices**:
+ * - Use 500+ samples per class (more data = more stable filters)
+ * - Band-pass filter EEG first (e.g., 8-30 Hz for motor imagery)
+ * - Select top 2-4 filters (most discriminative components)
+ * - Validate on separate test set to avoid overfitting
+ *
+ * @param dataClass1 - Trials from class 1 (interleaved: samples × channels)
+ * @param dataClass2 - Trials from class 2 (interleaved: samples × channels)
+ * @param numChannels - Number of EEG channels
+ * @param numFilters - Number of top filters to return (default: all channels)
+ * @returns Object with cspMatrix, eigenvalues, mean, and metadata
+ *
+ * @throws {TypeError} If parameters are invalid
+ * @throws {Error} If matrix dimensions don't match or decomposition fails
+ *
+ * @example
+ * // Motor imagery BCI: Left hand vs right hand
+ * // Training data: 100 trials per class, 8 channels, 500 samples per trial
+ * const leftHandData = new Float32Array(100 * 8 * 500);  // Class 1
+ * const rightHandData = new Float32Array(100 * 8 * 500); // Class 2
+ * // ... collect and concatenate trials ...
+ *
+ * // Calculate CSP filters
+ * const csp = calculateCommonSpatialPatterns(
+ *   leftHandData,
+ *   rightHandData,
+ *   8,  // 8 EEG channels
+ *   4   // Keep top 4 most discriminative filters
+ * );
+ *
+ * console.log("Top eigenvalue (class separability):", csp.eigenvalues[0]);
+ *
+ * // Apply in real-time classification pipeline
+ * const pipeline = createDspPipeline();
+ * pipeline
+ *   .BandpassFilter({ lowCutoff: 8, highCutoff: 30 })  // Motor imagery band
+ *   .CspTransform({
+ *     cspMatrix: csp.cspMatrix,
+ *     mean: csp.mean,
+ *     numChannels: 8,
+ *     numFilters: 4
+ *   })
+ *   .MovingVariance({ mode: "moving", windowSize: 100 });
+ * // Variance features → classifier
+ *
+ * @example
+ * // P300 speller: Target vs non-target ERPs
+ * const targetErps = new Float32Array(50 * 16 * 200);    // 50 target trials
+ * const nonTargetErps = new Float32Array(200 * 16 * 200); // 200 non-target trials
+ *
+ * const csp = calculateCommonSpatialPatterns(
+ *   targetErps,
+ *   nonTargetErps,
+ *   16, // 16 channels
+ *   6   // Top 6 filters
+ * );
+ *
+ * // Check if filters are discriminative
+ * const ratio = csp.eigenvalues[0] / csp.eigenvalues[csp.numFilters - 1];
+ * if (ratio > 10) {
+ *   console.log("Excellent class separability!");
+ * }
+ *
+ * @example
+ * // SSVEP: 12 Hz vs 15 Hz stimulation
+ * const data12Hz = new Float32Array(30 * 8 * 1000);  // 30 trials, 8 channels, 1s
+ * const data15Hz = new Float32Array(30 * 8 * 1000);
+ *
+ * const csp = calculateCommonSpatialPatterns(data12Hz, data15Hz, 8, 2);
+ *
+ * // Apply filters and extract frequency power
+ * pipeline
+ *   .CspTransform({
+ *     cspMatrix: csp.cspMatrix,
+ *     mean: csp.mean,
+ *     numChannels: 8,
+ *     numFilters: 2
+ *   })
+ *   .fftAnalysis({ fftSize: 256 });
+ * // Check power at 12 Hz vs 15 Hz
+ *
+ * @see MatrixTransformStage
+ * @see CspTransform
+ */
+export function calculateCommonSpatialPatterns(
+  dataClass1: Float32Array,
+  dataClass2: Float32Array,
+  numChannels: number,
+  numFilters?: number
+): CspResult {
+  if (!(dataClass1 instanceof Float32Array)) {
+    throw new TypeError(
+      "calculateCommonSpatialPatterns: dataClass1 must be a Float32Array"
+    );
+  }
+  if (!(dataClass2 instanceof Float32Array)) {
+    throw new TypeError(
+      "calculateCommonSpatialPatterns: dataClass2 must be a Float32Array"
+    );
+  }
+  if (!Number.isInteger(numChannels) || numChannels <= 0) {
+    throw new TypeError(
+      "calculateCommonSpatialPatterns: numChannels must be a positive integer"
+    );
+  }
+  if (
+    numFilters !== undefined &&
+    (!Number.isInteger(numFilters) ||
+      numFilters <= 0 ||
+      numFilters > numChannels)
+  ) {
+    throw new RangeError(
+      "calculateCommonSpatialPatterns: numFilters must be in range [1, numChannels]"
+    );
+  }
+
+  return DspAddon.calculateCommonSpatialPatterns(
+    dataClass1,
+    dataClass2,
+    numChannels,
+    numFilters
+  );
+}

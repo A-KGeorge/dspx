@@ -27,6 +27,14 @@ namespace dsp
         virtual bool isResizing() const { return false; }
 
         /**
+         * @brief Returns the output channel count for stages that change channel count.
+         *        Returns 0 if the stage doesn't change the channel count (default).
+         *
+         * @return The output channel count, or 0 if unchanged.
+         */
+        virtual int getOutputChannels() const { return 0; }
+
+        /**
          * @brief Returns the time scale factor for timestamp adjustment (for resizing stages).
          *        - Factor > 1.0: time is stretched (interpolation)
          *        - Factor < 1.0: time is compressed (decimation)

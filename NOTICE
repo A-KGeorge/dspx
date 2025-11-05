@@ -14,3 +14,7 @@ FFTPACK (Apache License 2.0)
 Copyright (c) 2004–2016 University Corporation for Atmospheric Research / NCAR
 Developed by Paul N. Swarztrauber  
 https://www.netlib.org/fftpack/
+
+Eigen (MPL-2.0)
+Copyright (C) Eigen contributors
+https://eigen.tuxfamily.org

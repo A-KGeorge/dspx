@@ -9,6 +9,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <algorithm>
+#include <numeric> // For std::inner_product (article optimization)
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -21,7 +22,7 @@ namespace dsp
 
         template <typename T>
         FirFilter<T>::FirFilter(const std::vector<T> &coefficients, bool stateful)
-            : m_coefficients(coefficients), m_stateIndex(0), m_stateMask(0), m_stateful(stateful)
+            : m_coefficients(coefficients), m_stateIndex(0), m_stateMask(0), m_stateful(stateful), m_useDoubleBuffer(false)
         {
             if (coefficients.empty())
             {
@@ -44,16 +45,33 @@ namespace dsp
 
             if (stateful)
             {
-                // Round up to next power of 2 for efficient circular buffer (enables bitwise AND instead of modulo)
-                size_t stateSize = coefficients.size();
-                size_t powerOf2 = 1;
-                while (powerOf2 < stateSize)
-                {
-                    powerOf2 <<= 1;
-                }
+                // For scalar path: Use double-buffered state (article optimization) for taps 16-128
+                // This enables contiguous memory access without wrap-around logic in inner loop
+                // Similar to NEON guard zone, but for scalar/auto-vectorization path
+                const bool shouldUseDoubleBuffer = coefficients.size() >= 16 && coefficients.size() <= 128;
+                m_useDoubleBuffer = shouldUseDoubleBuffer;
 
-                m_state.resize(powerOf2, T(0));
-                m_stateMask = powerOf2 - 1; // For fast modulo: index & mask == index % size
+                if (m_useDoubleBuffer)
+                {
+                    // Allocate double-sized buffer: z[0..N-1] and z[N..2N-1]
+                    // Write sample to BOTH positions to enable contiguous SIMD reads
+                    const size_t numCoeffs = coefficients.size();
+                    m_state.resize(numCoeffs * 2, T(0));
+                    m_stateMask = numCoeffs - 1; // Wrap within first half only
+                }
+                else
+                {
+                    // Traditional circular buffer with power-of-2 for bitwise AND
+                    size_t stateSize = coefficients.size();
+                    size_t powerOf2 = 1;
+                    while (powerOf2 < stateSize)
+                    {
+                        powerOf2 <<= 1;
+                    }
+
+                    m_state.resize(powerOf2, T(0));
+                    m_stateMask = powerOf2 - 1; // For fast modulo: index & mask == index % size
+                }
             }
         }
 
@@ -73,36 +91,55 @@ namespace dsp
             }
 #endif
 
-            // Store input in circular buffer
-            m_state[m_stateIndex] = input;
-
-            // Compute output directly from circular buffer (no copy needed)
-            T output = T(0);
-
-            // Use unrolled scalar loop for both float and double
-            // Modern compilers auto-vectorize this better than manual SIMD with data gather
             const size_t numCoeffs = m_coefficients.size();
-            size_t i = 0;
 
-            // Process 4 coefficients at a time (loop unrolling for ILP)
-            for (; i + 3 < numCoeffs; i += 4)
+            if (m_useDoubleBuffer)
             {
-                output += m_coefficients[i] * m_state[(m_stateIndex - i) & m_stateMask];
-                output += m_coefficients[i + 1] * m_state[(m_stateIndex - i - 1) & m_stateMask];
-                output += m_coefficients[i + 2] * m_state[(m_stateIndex - i - 2) & m_stateMask];
-                output += m_coefficients[i + 3] * m_state[(m_stateIndex - i - 3) & m_stateMask];
-            }
+                // **ARTICLE OPTIMIZATION: Double-buffered state**
+                // Write sample to BOTH positions: z[i] and z[i + N]
+                // This enables contiguous SIMD reads without wrap-around logic
+                m_state[m_stateIndex] = input;
+                m_state[m_stateIndex + numCoeffs] = input; // Mirror to second half
 
-            // Handle remaining coefficients
-            for (; i < numCoeffs; ++i)
+                // Compute convolution via std::inner_product (compiler auto-vectorizes)
+                // Read forward from stateIndex: oldest to newest sample
+                T output = std::inner_product(
+                    m_coefficients.rbegin(), m_coefficients.rend(), // Reverse coefficients
+                    &m_state[m_stateIndex],                         // Start from current position
+                    T(0));
+
+                // Advance index (wrap within first half using modulo)
+                m_stateIndex = (m_stateIndex + 1) % numCoeffs;
+                return output;
+            }
+            else
             {
-                output += m_coefficients[i] * m_state[(m_stateIndex - i) & m_stateMask];
+                // Traditional circular buffer with manual loop unrolling
+                m_state[m_stateIndex] = input;
+
+                T output = T(0);
+                size_t i = 0;
+
+                // Process 4 coefficients at a time (loop unrolling for ILP)
+                for (; i + 3 < numCoeffs; i += 4)
+                {
+                    output += m_coefficients[i] * m_state[(m_stateIndex - i) & m_stateMask];
+                    output += m_coefficients[i + 1] * m_state[(m_stateIndex - i - 1) & m_stateMask];
+                    output += m_coefficients[i + 2] * m_state[(m_stateIndex - i - 2) & m_stateMask];
+                    output += m_coefficients[i + 3] * m_state[(m_stateIndex - i - 3) & m_stateMask];
+                }
+
+                // Handle remaining coefficients
+                for (; i < numCoeffs; ++i)
+                {
+                    output += m_coefficients[i] * m_state[(m_stateIndex - i) & m_stateMask];
+                }
+
+                // Advance circular buffer index (bitwise AND instead of modulo)
+                m_stateIndex = (m_stateIndex + 1) & m_stateMask;
+
+                return output;
             }
-
-            // Advance circular buffer index (bitwise AND instead of modulo)
-            m_stateIndex = (m_stateIndex + 1) & m_stateMask;
-
-            return output;
         }
 
         template <typename T>
@@ -163,36 +200,57 @@ namespace dsp
             else
             {
                 // Stateful mode: optimized inline block processing
-                // Direct access to state buffer with bitwise masking - no copying
                 const size_t numCoeffs = m_coefficients.size();
 
-                for (size_t i = 0; i < length; ++i)
+                if (m_useDoubleBuffer)
                 {
-                    // Update state with new sample
-                    m_stateIndex = (m_stateIndex + 1) & m_stateMask;
-                    m_state[m_stateIndex] = input[i];
-
-                    // Compute convolution directly from circular buffer (no copy)
-                    // Loop unrolling for instruction-level parallelism
-                    T sum = 0;
-                    size_t j = 0;
-
-                    // Process 4 coefficients at a time (unrolled)
-                    for (; j + 3 < numCoeffs; j += 4)
+                    // **ARTICLE OPTIMIZATION: Double-buffered batch processing**
+                    for (size_t i = 0; i < length; ++i)
                     {
-                        sum += m_coefficients[j] * m_state[(m_stateIndex - j) & m_stateMask];
-                        sum += m_coefficients[j + 1] * m_state[(m_stateIndex - j - 1) & m_stateMask];
-                        sum += m_coefficients[j + 2] * m_state[(m_stateIndex - j - 2) & m_stateMask];
-                        sum += m_coefficients[j + 3] * m_state[(m_stateIndex - j - 3) & m_stateMask];
-                    }
+                        // Write to both buffer positions
+                        m_state[m_stateIndex] = input[i];
+                        m_state[m_stateIndex + numCoeffs] = input[i];
 
-                    // Handle remaining samples
-                    for (; j < numCoeffs; ++j)
+                        // Use std::inner_product for compiler auto-vectorization
+                        output[i] = std::inner_product(
+                            m_coefficients.rbegin(), m_coefficients.rend(),
+                            &m_state[m_stateIndex],
+                            T(0));
+
+                        m_stateIndex = (m_stateIndex + 1) % numCoeffs;
+                    }
+                }
+                else
+                {
+                    // Traditional circular buffer with manual loop unrolling
+                    for (size_t i = 0; i < length; ++i)
                     {
-                        sum += m_coefficients[j] * m_state[(m_stateIndex - j) & m_stateMask];
-                    }
+                        // Update state with new sample
+                        m_stateIndex = (m_stateIndex + 1) & m_stateMask;
+                        m_state[m_stateIndex] = input[i];
 
-                    output[i] = sum;
+                        // Compute convolution directly from circular buffer (no copy)
+                        // Loop unrolling for instruction-level parallelism
+                        T sum = 0;
+                        size_t j = 0;
+
+                        // Process 4 coefficients at a time (unrolled)
+                        for (; j + 3 < numCoeffs; j += 4)
+                        {
+                            sum += m_coefficients[j] * m_state[(m_stateIndex - j) & m_stateMask];
+                            sum += m_coefficients[j + 1] * m_state[(m_stateIndex - j - 1) & m_stateMask];
+                            sum += m_coefficients[j + 2] * m_state[(m_stateIndex - j - 2) & m_stateMask];
+                            sum += m_coefficients[j + 3] * m_state[(m_stateIndex - j - 3) & m_stateMask];
+                        }
+
+                        // Handle remaining samples
+                        for (; j < numCoeffs; ++j)
+                        {
+                            sum += m_coefficients[j] * m_state[(m_stateIndex - j) & m_stateMask];
+                        }
+
+                        output[i] = sum;
+                    }
                 }
             }
         }

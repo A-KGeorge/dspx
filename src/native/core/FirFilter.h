@@ -142,6 +142,7 @@ namespace dsp
             size_t m_stateIndex;           // Current position in circular state buffer
             size_t m_stateMask;            // Bitmask for power-of-2 circular buffer (replaces modulo)
             bool m_stateful;               // Whether to maintain state between calls
+            bool m_useDoubleBuffer;        // Use double-buffered state (article optimization)
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
             // NEON-optimized filter for ARM (auto-selected for small-medium taps + float32)

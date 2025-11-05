@@ -330,16 +330,16 @@ export interface LmsFilterParams {
 
 /**
  * Parameters for RLS (Recursive Least Squares) adaptive filter
- * 
+ *
  * RLS provides faster convergence than LMS/NLMS at the cost of O(N^2) complexity.
  * Maintains an N×N inverse covariance matrix for optimal weight updates.
- * 
+ *
  * Requires exactly 2 channels:
  * - Channel 0: Primary signal x[n]
  * - Channel 1: Desired/reference signal d[n]
- * 
+ *
  * Output: Error signal e[n] = d[n] - y[n]
- * 
+ *
  * Example:
  * ```typescript
  * // System identification with faster convergence than LMS
@@ -800,4 +800,329 @@ export interface ApproximateEntropyParams {
    * Tolerance for matching (default: 0.2 * std deviation)
    */
   r?: number;
+}
+
+/**
+ * Result from PCA (Principal Component Analysis) calculation
+ *
+ * PCA finds orthogonal directions of maximum variance in the data.
+ * Use for dimensionality reduction, feature extraction, noise reduction.
+ */
+export interface PcaResult {
+  /** Channel mean vector (size: numChannels) */
+  mean: Float32Array;
+
+  /** PCA transformation matrix (size: numChannels  numChannels, column-major) */
+  pcaMatrix: Float32Array;
+
+  /** Eigenvalues sorted descending (size: numChannels) */
+  eigenvalues: Float32Array;
+
+  /** Explained variance ratio for each component (size: numChannels) */
+  explainedVariance: Float32Array;
+
+  /** Number of input channels */
+  numChannels: number;
+
+  /** Number of output components (same as numChannels for full PCA) */
+  numComponents: number;
+}
+
+/**
+ * Result from Whitening transformation calculation
+ *
+ * Whitening transforms data to have identity covariance matrix.
+ * Use for preprocessing before ICA, decorrelation, normalization.
+ */
+export interface WhiteningResult {
+  /** Channel mean vector (size: numChannels) */
+  mean: Float32Array;
+
+  /** Whitening transformation matrix (size: numChannels  numChannels, column-major) */
+  whiteningMatrix: Float32Array;
+
+  /** Number of input channels */
+  numChannels: number;
+
+  /** Number of output components (same as numChannels) */
+  numComponents: number;
+
+  /** Regularization parameter used */
+  regularization: number;
+}
+
+/**
+ * Result from ICA (Independent Component Analysis) calculation
+ *
+ * ICA finds statistically independent components from mixed signals.
+ * Use for blind source separation, artifact removal, signal decomposition.
+ */
+export interface IcaResult {
+  /** Channel mean vector (size: numChannels) */
+  mean: Float32Array;
+
+  /** ICA unmixing matrix (size: numChannels  numChannels, column-major) */
+  icaMatrix: Float32Array;
+
+  /** Number of input channels */
+  numChannels: number;
+
+  /** Number of output components (same as numChannels) */
+  numComponents: number;
+
+  /** Whether FastICA algorithm converged */
+  converged: boolean;
+
+  /** Number of iterations performed */
+  iterations: number;
+}
+
+/**
+ * Parameters for PCA Transform stage (applies pre-trained PCA)
+ */
+export interface PcaTransformParams {
+  /** Pre-trained PCA matrix from calculatePca() */
+  pcaMatrix: Float32Array;
+
+  /** Mean vector from calculatePca() */
+  mean: Float32Array;
+
+  /** Number of input channels */
+  numChannels: number;
+
+  /** Number of output components ( numChannels for dimensionality reduction) */
+  numComponents: number;
+}
+
+/**
+ * Parameters for ICA Transform stage (applies pre-trained ICA)
+ */
+export interface IcaTransformParams {
+  /** Pre-trained ICA matrix from calculateIca() */
+  icaMatrix: Float32Array;
+
+  /** Mean vector from calculateIca() */
+  mean: Float32Array;
+
+  /** Number of input channels */
+  numChannels: number;
+
+  /** Number of output components */
+  numComponents: number;
+}
+
+/**
+ * Parameters for Whitening Transform stage (applies pre-trained whitening)
+ */
+export interface WhiteningTransformParams {
+  /** Pre-trained whitening matrix from calculateWhitening() */
+  whiteningMatrix: Float32Array;
+
+  /** Mean vector from calculateWhitening() */
+  mean: Float32Array;
+
+  /** Number of input channels */
+  numChannels: number;
+
+  /** Number of output components */
+  numComponents: number;
+}
+
+/**
+ * Result from beamformer weights calculation
+ *
+ * Provides steering weights and blocking matrix for Generalized Sidelobe Canceler (GSC).
+ * Use with GscPreprocessor + LmsFilter/RlsFilter for adaptive beamforming.
+ */
+export interface BeamformerWeightsResult {
+  /** Steering weights for delay-and-sum beamforming (size: numChannels) */
+  steeringWeights: Float32Array;
+
+  /** Blocking matrix for noise reference creation (size: numChannels × (numChannels-1), column-major) */
+  blockingMatrix: Float32Array;
+
+  /** Number of microphone channels */
+  numChannels: number;
+
+  /** Array geometry used */
+  geometry: string;
+
+  /** Target angle in degrees */
+  targetAngleDeg: number;
+}
+
+/**
+ * Result from Common Spatial Patterns (CSP) calculation
+ *
+ * CSP finds spatial filters that maximize class separability for BCI/EEG classification.
+ * Use for motor imagery, P300, SSVEP, and other paradigms.
+ */
+export interface CspResult {
+  /** CSP spatial filter matrix (size: numChannels × numFilters, column-major) */
+  cspMatrix: Float32Array;
+
+  /** Eigenvalues corresponding to filters (size: numFilters, sorted descending) */
+  eigenvalues: Float32Array;
+
+  /** Channel mean vector (size: numChannels) */
+  mean: Float32Array;
+
+  /** Number of input channels */
+  numChannels: number;
+
+  /** Number of output filters */
+  numFilters: number;
+}
+
+/**
+ * Parameters for GSC Preprocessor stage (adaptive beamforming)
+ */
+export interface GscPreprocessorParams {
+  /** Number of input channels (microphones) */
+  numChannels: number;
+
+  /** Steering weights from calculateBeamformerWeights() */
+  steeringWeights: Float32Array;
+
+  /** Blocking matrix from calculateBeamformerWeights() */
+  blockingMatrix: Float32Array;
+}
+
+/**
+ * Parameters for Channel Selector stage (extract specific channels)
+ */
+export interface ChannelSelectorParams {
+  /** Number of input channels */
+  numInputChannels: number;
+
+  /** Number of output channels to extract (keeps first N channels) */
+  numOutputChannels: number;
+}
+
+/**
+ * Parameters for Channel Select stage (select channels by indices)
+ */
+export interface ChannelSelectParams {
+  /** Array of channel indices to select (0-based)
+   * Can select, reorder, or duplicate channels.
+   * Example: [0, 3, 7] selects channels 0, 3, 7 from input
+   * Example: [1, 0] swaps stereo channels
+   * Example: [0, 0] duplicates channel 0 to create stereo from mono
+   */
+  channels: number[];
+
+  /** Number of input channels (for validation) */
+  numInputChannels: number;
+}
+
+/**
+ * Parameters for Channel Merge stage (merge/duplicate channels)
+ */
+export interface ChannelMergeParams {
+  /** Mapping of input channels to output channels.
+   * Each element specifies which input channel goes to that output position.
+   * Length determines output channel count.
+   * Example: [0, 0] duplicates channel 0 (mono to stereo)
+   * Example: [0, 1, 2] keeps 3 channels as-is
+   * Example: [0, 0, 1, 1] duplicates channels 0 and 1
+   */
+  mapping: number[];
+
+  /** Number of input channels (for validation) */
+  numInputChannels: number;
+}
+
+/**
+ * Parameters for Clip Detection stage
+ */
+export interface ClipDetectionParams {
+  /** Absolute amplitude threshold for clipping detection.
+   * Samples with |value| >= threshold are marked as clipped (output: 1.0).
+   * Example: 0.95 detects clipping at 95% of full scale.
+   */
+  threshold: number;
+}
+
+/**
+ * Parameters for Peak Detection stage
+ */
+export interface PeakDetectionParams {
+  /** Minimum amplitude threshold for peak detection.
+   * Only local maxima above this threshold are detected.
+   * Example: 0.5 detects peaks above 50% amplitude.
+   */
+  threshold: number;
+}
+
+/**
+ * Parameters for Integrator stage (leaky integrator using IIR filter)
+ */
+export interface IntegratorParams {
+  /** Leakage coefficient (0 < α <= 1). Default 0.99.
+   * - α = 1.0: Perfect integration (no leakage, DC gain = ∞)
+   * - α = 0.99: Slight leakage (DC gain ≈ 100)
+   * - α = 0.9: More leakage (DC gain = 10)
+   *
+   * Formula: y[n] = x[n] + α * y[n-1]
+   *
+   * Use cases:
+   * - Accelerometer → velocity: alpha = 0.99
+   * - Low-pass smoothing: alpha = 0.9-0.99
+   * - Envelope detection: alpha = 0.95
+   */
+  alpha?: number;
+}
+
+/**
+ * Parameters for SNR (Signal-to-Noise Ratio) stage.
+ *
+ * Requires exactly 2 input channels:
+ * - Channel 0: Signal (clean or signal+noise)
+ * - Channel 1: Noise reference
+ *
+ * Outputs single channel containing SNR in dB:
+ * SNR_dB = 10 * log10(signal_power / noise_power)
+ *
+ * Uses dual RMS filters with specified window size to compute
+ * running power estimates. Output is clamped to [-100, 100] dB.
+ *
+ * @example
+ * ```typescript
+ * // Audio quality monitoring (100ms window at 16kHz)
+ * processor.Snr({ windowSize: 1600 })
+ *   .process(twoChannelAudio, 16000, 2);
+ *
+ * // Speech enhancement validation (50ms window at 8kHz)
+ * processor.Snr({ windowSize: 400 })
+ *   .process(speechWithNoise, 8000, 2);
+ * ```
+ */
+export interface SnrParams {
+  /**
+   * Window size in samples for RMS computation.
+   * Larger windows provide smoother SNR estimates.
+   *
+   * Typical values:
+   * - 100-500 samples: Fast response for dynamic signals
+   * - 500-2000 samples: Balanced smoothing
+   * - 2000+ samples: Very smooth, slow-changing SNR
+   */
+  windowSize: number;
+}
+
+/**
+ * Parameters for CSP Transform stage (applies pre-trained CSP filters)
+ */
+export interface CspTransformParams {
+  /** Pre-trained CSP matrix from calculateCommonSpatialPatterns() */
+  cspMatrix: Float32Array;
+
+  /** Mean vector from calculateCommonSpatialPatterns() */
+  mean: Float32Array;
+
+  /** Number of input channels */
+  numChannels: number;
+
+  /** Number of output filters/components */
+  numFilters: number;
 }

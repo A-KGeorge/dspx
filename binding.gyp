@@ -19,6 +19,7 @@
         "src/native/core/IirFilter.cc",
         "src/native/FftBindings.cc",
         "src/native/FilterBindings.cc",
+        "src/native/MatrixBindings.cc",
         "src/native/UtilityBindings.cc",
         "src/native/utils/CircularBufferArray.cc",
         "src/native/utils/CircularBufferVector.cc",
@@ -33,7 +34,8 @@
         "src/native/core",
         "src/native/utils",
         "src/native/adapters",
-        "src/native/emg"
+        "src/native/emg",
+        "src/native/vendors/eigen-3.4.0"
       ],
       "defines": [
         "NAPI_VERSION=8"
