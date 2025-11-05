@@ -1,0 +1,206 @@
+#pragma once
+
+#include "../IDspStage.h"
+#include "../core/RlsFilter.h"
+#include <napi.h>
+#include <memory>
+#include <vector>
+#include <stdexcept>
+
+namespace dsp
+{
+    namespace adapters
+    {
+
+        /**
+         * @brief RLS (Recursive Least Squares) adaptive filter pipeline stage.
+         *
+         * RLS provides faster convergence than LMS/NLMS at the cost of O(N^2) complexity.
+         * Maintains an N×N inverse covariance matrix for optimal weight updates.
+         *
+         * This stage REQUIRES exactly 2 channels:
+         * - Channel 0: Primary signal x[n] (the signal to be filtered)
+         * - Channel 1: Desired signal d[n] (the reference signal)
+         *
+         * Output: Error signal e[n] = d[n] - y[n] on both channels
+         *
+         * Parameters:
+         * - numTaps: Filter length (number of coefficients)
+         * - lambda: Forgetting factor (0 < λ ≤ 1, typically 0.98-0.9999)
+         *   - Higher values (0.999): Longer memory, slower adaptation
+         *   - Lower values (0.95): Shorter memory, faster tracking
+         * - delta: Regularization parameter (typically 0.01-1.0)
+         *   - Controls initial P matrix: P(0) = δ * I
+         *   - Larger values: More initial uncertainty, faster initial convergence
+         */
+        class RlsStage : public IDspStage
+        {
+        public:
+            RlsStage(size_t numTaps, float lambda, float delta = 0.01f)
+                : m_numTaps(numTaps), m_lambda(lambda), m_delta(delta), m_initialized(false)
+            {
+
+                if (numTaps == 0)
+                {
+                    throw std::invalid_argument("RlsStage: numTaps must be > 0");
+                }
+                if (lambda <= 0.0f || lambda > 1.0f)
+                {
+                    throw std::invalid_argument("RlsStage: lambda must be in (0, 1]");
+                }
+                if (delta <= 0.0f)
+                {
+                    throw std::invalid_argument("RlsStage: delta must be > 0");
+                }
+            }
+
+            const char *getType() const override
+            {
+                return "rlsFilter";
+            }
+
+            void process(float *buffer, size_t numSamples, int numChannels,
+                         const float *timestamps = nullptr) override
+            {
+
+                if (numChannels != 2)
+                {
+                    throw std::invalid_argument(
+                        "RlsStage requires exactly 2 channels: "
+                        "Channel 0 = primary signal x[n], Channel 1 = desired signal d[n]");
+                }
+
+                if (!m_initialized)
+                {
+                    m_filter = std::make_unique<dsp::core::RlsFilter>(m_numTaps, m_lambda, m_delta);
+                    m_initialized = true;
+                }
+
+                size_t samplesPerChannel = numSamples / numChannels;
+
+                // Process each sample pair
+                for (size_t i = 0; i < samplesPerChannel; ++i)
+                {
+                    float primary = buffer[i * numChannels + 0]; // Channel 0: x[n]
+                    float desired = buffer[i * numChannels + 1]; // Channel 1: d[n]
+
+                    // RLS adaptive filtering
+                    float error = m_filter->processSample(primary, desired);
+
+                    // Output error on both channels
+                    buffer[i * numChannels + 0] = error;
+                    buffer[i * numChannels + 1] = error;
+                }
+            }
+
+            Napi::Object serializeState(Napi::Env env) const override
+            {
+                Napi::Object state = Napi::Object::New(env);
+
+                state.Set("numTaps", Napi::Number::New(env, m_numTaps));
+                state.Set("lambda", Napi::Number::New(env, m_lambda));
+                state.Set("delta", Napi::Number::New(env, m_delta));
+                state.Set("initialized", Napi::Boolean::New(env, m_initialized));
+
+                if (m_initialized && m_filter)
+                {
+                    // Serialize weights
+                    const auto &weights = m_filter->getWeights();
+                    Napi::Array weightsArray = Napi::Array::New(env, weights.size());
+                    for (size_t i = 0; i < weights.size(); ++i)
+                    {
+                        weightsArray.Set(i, Napi::Number::New(env, weights[i]));
+                    }
+                    state.Set("weights", weightsArray);
+
+                    // Serialize inverse covariance matrix (N×N)
+                    const auto &inverseCov = m_filter->getInverseCov();
+                    Napi::Array pMatrixArray = Napi::Array::New(env, inverseCov.size());
+                    for (size_t i = 0; i < inverseCov.size(); ++i)
+                    {
+                        pMatrixArray.Set(i, Napi::Number::New(env, inverseCov[i]));
+                    }
+                    state.Set("inverseCov", pMatrixArray);
+
+                    // Serialize buffer contents
+                    const auto &buffer = m_filter->getBuffer();
+                    std::vector<float> bufferData = buffer.toVector();
+                    Napi::Array bufferArray = Napi::Array::New(env, bufferData.size());
+                    for (size_t i = 0; i < bufferData.size(); ++i)
+                    {
+                        bufferArray.Set(i, Napi::Number::New(env, bufferData[i]));
+                    }
+                    state.Set("buffer", bufferArray);
+                }
+
+                return state;
+            }
+
+            void deserializeState(const Napi::Object &state) override
+            {
+                m_numTaps = state.Get("numTaps").As<Napi::Number>().Uint32Value();
+                m_lambda = state.Get("lambda").As<Napi::Number>().FloatValue();
+                m_delta = state.Get("delta").As<Napi::Number>().FloatValue();
+                m_initialized = state.Get("initialized").As<Napi::Boolean>().Value();
+
+                if (m_initialized)
+                {
+                    // Recreate filter
+                    m_filter = std::make_unique<dsp::core::RlsFilter>(m_numTaps, m_lambda, m_delta);
+
+                    // Restore weights
+                    if (state.Has("weights"))
+                    {
+                        Napi::Array weightsArray = state.Get("weights").As<Napi::Array>();
+                        std::vector<float> weights(weightsArray.Length());
+                        for (size_t i = 0; i < weightsArray.Length(); ++i)
+                        {
+                            weights[i] = weightsArray.Get(i).As<Napi::Number>().FloatValue();
+                        }
+                        m_filter->setWeights(weights);
+                    }
+
+                    // Restore inverse covariance matrix
+                    if (state.Has("inverseCov"))
+                    {
+                        Napi::Array pMatrixArray = state.Get("inverseCov").As<Napi::Array>();
+                        std::vector<float> inverseCov(pMatrixArray.Length());
+                        for (size_t i = 0; i < pMatrixArray.Length(); ++i)
+                        {
+                            inverseCov[i] = pMatrixArray.Get(i).As<Napi::Number>().FloatValue();
+                        }
+                        m_filter->setInverseCov(inverseCov);
+                    }
+
+                    // Restore buffer
+                    if (state.Has("buffer"))
+                    {
+                        Napi::Array bufferArray = state.Get("buffer").As<Napi::Array>();
+                        std::vector<float> bufferData(bufferArray.Length());
+                        for (size_t i = 0; i < bufferArray.Length(); ++i)
+                        {
+                            bufferData[i] = bufferArray.Get(i).As<Napi::Number>().FloatValue();
+                        }
+                        m_filter->setBuffer(bufferData);
+                    }
+                }
+            }
+
+            void reset() override
+            {
+                if (m_initialized && m_filter)
+                {
+                    m_filter->reset();
+                }
+            }
+
+        private:
+            size_t m_numTaps;
+            float m_lambda;
+            float m_delta;
+            bool m_initialized;
+            std::unique_ptr<dsp::core::RlsFilter> m_filter;
+        };
+
+    } // namespace adapters
+} // namespace dsp

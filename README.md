@@ -13,22 +13,6 @@ A modern DSP library built for Node.js backends processing real-time biosignals,
 
 ---
 
-## ⚠️ Disclaimer
-
-> **Important:** This library has **not been tested in production** and is primarily intended for
-> research, prototyping, and performance experimentation.
-> But it has been tested with over 500 unit and integration tests.
->
-> - Use it **at your own discretion**.
-> - If you encounter bugs, crashes, or inconsistent behavior, please **open an issue**.
-> - Pull requests (PRs) are welcome — I’ll review and merge fixes or improvements as time allows.
->
-> The goal is to build a **community-maintained** DSP framework.  
-> Early adopters are encouraged to contribute benchmarks, feature requests,
-> and test results to help make this stable for real-world deployments.
-
----
-
 ## ✨ Features
 
 - 🚀 **Native C++ Performance** – Optimized circular buffers and filters with SIMD acceleration for real-time processing
@@ -1731,6 +1715,20 @@ await worker2.process(chunk2, { sampleRate: 2000, channels: 1 });
 - **In-place processing**: Use `process()` instead of `processCopy()` when you don't need to preserve the input buffer.
 - **Async processing**: Filter processing runs on a background thread via `Napi::AsyncWorker` to avoid blocking the event loop.
 - **Batch sizes**: Process reasonable chunk sizes (e.g., 512-4096 samples) to balance latency and throughput.
+
+### Not Production-Ready
+
+> **Important:** This library has **not been tested in production** and is primarily intended for
+> research, prototyping, and performance experimentation.
+> But it has been tested with over 500 unit and integration tests.
+>
+> - Use it **at your own discretion**.
+> - If you encounter bugs, crashes, or inconsistent behavior, please **open an issue**.
+> - Pull requests (PRs) are welcome — I’ll review and merge fixes or improvements as time allows.
+>
+> The goal is to build a **community-maintained** DSP framework.  
+> Early adopters are encouraged to contribute benchmarks, feature requests,
+> and test results to help make this stable for real-world deployments.
 
 ---
 

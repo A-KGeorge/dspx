@@ -23,6 +23,7 @@ import type {
   WaveletTransformParams,
   HilbertEnvelopeParams,
   PipelineCallbacks,
+  RlsFilterParams,
   LogEntry,
   SampleBatch,
   TapCallback,
@@ -876,13 +877,18 @@ class DspProcessor {
    * ```
    * y[n] = w^T * x[n]              (filter output)
    * e[n] = d[n] - y[n]             (error signal)
-   * w[n+1] = w[n] + mu * e[n] * x[n]  (weight update)
+   * w[n+1] = w[n] + mu * e[n] * x[n]  (weight update - LMS)
+   * w[n+1] = w[n] + (mu / ||x||^2) * e[n] * x[n]  (weight update - NLMS)
    * ```
+   *
+   * **NLMS (Normalized LMS)**: Set `normalized: true` to enable the Normalized LMS
+   * algorithm, which normalizes the update by the input signal power. This provides
+   * more stable convergence when the input signal amplitude varies significantly.
    *
    * @param params - LMS filter configuration
    * @param params.numTaps - Number of filter taps (8-128 typical)
    * @param params.learningRate - Learning rate mu (0.001-0.1), or use params.mu
-   * @param params.normalized - Use NLMS for better stability (default: false)
+   * @param params.normalized - Use NLMS (Normalized LMS) for better stability (default: false)
    * @param params.lambda - Leaky LMS regularization (default: 0.0)
    *
    * @returns this instance for method chaining
@@ -892,7 +898,7 @@ class DspProcessor {
    *
    * @example
    * ```typescript
-   * // Noise cancellation: Remove 60Hz hum from audio
+   * // Standard LMS for noise cancellation
    * const pipeline = createDspPipeline();
    * pipeline.LmsFilter({ numTaps: 32, learningRate: 0.01 });
    *
@@ -922,6 +928,17 @@ class DspProcessor {
    * }
    *
    * const echoFree = await pipeline.process(interleaved, { channels: 2 });
+   * ```
+   *
+   * @example
+   * ```typescript
+   * // NLMS for better stability with varying signal amplitudes
+   * pipeline.LmsFilter({ numTaps: 64, mu: 0.1, normalized: true });
+   *
+   * // NLMS normalizes by input power, making it more robust to:
+   * // - Varying signal amplitudes
+   * // - Different channel power levels
+   * // - Non-stationary signals
    * ```
    */
   LmsFilter(params: LmsFilterParams): this {
@@ -963,6 +980,74 @@ class DspProcessor {
     });
 
     this.stages.push(`lmsFilter:${params.numTaps}taps`);
+    return this;
+  }
+
+  /**
+   * Add an RLS (Recursive Least Squares) adaptive filter stage to the pipeline
+   * Provides faster convergence than LMS/NLMS at the cost of O(N^2) complexity
+   *
+   * **Requires exactly 2 channels:**
+   * - Channel 0: Primary signal x[n] (the signal to be filtered)
+   * - Channel 1: Desired signal d[n] (the reference signal)
+   *
+   * **Output:** Error signal e[n] = d[n] - y[n] on both channels
+   *
+   * @param params - RLS filter configuration
+   * @param params.numTaps - Filter length (number of coefficients), typically 8-64
+   * @param params.lambda - Forgetting factor (0 < λ ≤ 1), typically 0.98-0.9999
+   * @param params.delta - Regularization parameter (optional, default: 0.01)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Basic system identification with RLS
+   * pipeline.RlsFilter({ numTaps: 32, lambda: 0.99 });
+   *
+   * @example
+   * // Faster tracking with lower lambda
+   * pipeline.RlsFilter({ numTaps: 16, lambda: 0.95, delta: 0.1 });
+   *
+   * @example
+   * // Acoustic echo cancellation
+   * pipeline.RlsFilter({ numTaps: 128, lambda: 0.9999, delta: 0.01 });
+   */
+  RlsFilter(params: RlsFilterParams): this {
+    // Validate numTaps
+    if (
+      params.numTaps === undefined ||
+      params.numTaps <= 0 ||
+      !Number.isInteger(params.numTaps)
+    ) {
+      throw new TypeError(
+        `RlsFilter: numTaps must be a positive integer, got ${params.numTaps}`
+      );
+    }
+
+    // Lambda (forgetting factor) is required
+    if (params.lambda === undefined) {
+      throw new TypeError("RlsFilter: lambda (forgetting factor) is required");
+    }
+
+    if (params.lambda <= 0 || params.lambda > 1.0) {
+      throw new RangeError(
+        `RlsFilter: lambda must be in (0, 1], got ${params.lambda}`
+      );
+    }
+
+    // Optional delta parameter with validation
+    const delta = params.delta ?? 0.01;
+    if (delta <= 0) {
+      throw new RangeError(`RlsFilter: delta must be > 0, got ${delta}`);
+    }
+
+    // Add stage to native pipeline
+    this.nativeInstance.addStage("rlsFilter", {
+      numTaps: params.numTaps,
+      lambda: params.lambda,
+      delta: delta,
+    });
+
+    this.stages.push(`rlsFilter:${params.numTaps}taps:λ=${params.lambda}`);
     return this;
   }
 

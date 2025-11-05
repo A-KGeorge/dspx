@@ -15,6 +15,7 @@
 #include "adapters/ConvolutionStage.h"       // Convolution stage
 #include "adapters/LinearRegressionStage.h"  // Linear Regression stage
 #include "adapters/LmsStage.h"               // LMS Adaptive Filter stage
+#include "adapters/RlsStage.h"               // RLS Adaptive Filter stage
 #include "adapters/WaveletTransformStage.h"  // Wavelet Transform stage
 #include "adapters/HilbertEnvelopeStage.h"   // Hilbert Envelope stage
 
@@ -506,6 +507,31 @@ namespace dsp
             }
 
             return std::make_unique<dsp::LmsStage>(numTaps, learningRate, normalized, lambda);
+        };
+
+        // Factory for RLS Adaptive Filter stage
+        m_stageFactories["rlsFilter"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("numTaps"))
+            {
+                throw std::invalid_argument("RlsFilter: 'numTaps' is required");
+            }
+            size_t numTaps = params.Get("numTaps").As<Napi::Number>().Uint32Value();
+
+            if (!params.Has("lambda"))
+            {
+                throw std::invalid_argument("RlsFilter: 'lambda' (forgetting factor) is required");
+            }
+            float lambda = params.Get("lambda").As<Napi::Number>().FloatValue();
+
+            // Optional delta parameter (regularization)
+            float delta = 0.01f; // Default
+            if (params.Has("delta"))
+            {
+                delta = params.Get("delta").As<Napi::Number>().FloatValue();
+            }
+
+            return std::make_unique<dsp::adapters::RlsStage>(numTaps, lambda, delta);
         };
 
         // Factory for Wavelet Transform stage

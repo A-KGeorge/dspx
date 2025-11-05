@@ -117,6 +117,10 @@ export type {
   ResampleParams,
   ConvolutionParams,
 
+  // Adaptive filters
+  LmsFilterParams,
+  RlsFilterParams,
+
   // Wavelet and Hilbert
   WaveletType,
   WaveletTransformParams,

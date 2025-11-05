@@ -329,6 +329,53 @@ export interface LmsFilterParams {
 }
 
 /**
+ * Parameters for RLS (Recursive Least Squares) adaptive filter
+ * 
+ * RLS provides faster convergence than LMS/NLMS at the cost of O(N^2) complexity.
+ * Maintains an N×N inverse covariance matrix for optimal weight updates.
+ * 
+ * Requires exactly 2 channels:
+ * - Channel 0: Primary signal x[n]
+ * - Channel 1: Desired/reference signal d[n]
+ * 
+ * Output: Error signal e[n] = d[n] - y[n]
+ * 
+ * Example:
+ * ```typescript
+ * // System identification with faster convergence than LMS
+ * pipeline.RlsFilter({ numTaps: 32, lambda: 0.99 });
+ * ```
+ */
+export interface RlsFilterParams {
+  /**
+   * Number of filter taps (filter order)
+   * Higher values model more complex systems but require O(N^2) computation
+   * Typical values: 8-64 (avoid very large values due to computational cost)
+   */
+  numTaps: number;
+
+  /**
+   * Forgetting factor (0 < λ ≤ 1)
+   * Controls how much weight is given to past vs. recent data
+   * - Higher values (0.999): Long memory, slower adaptation to changes
+   * - Lower values (0.95): Short memory, faster tracking of time-varying systems
+   * Typical range: 0.98 to 0.9999
+   * Default: none (required parameter)
+   */
+  lambda: number;
+
+  /**
+   * Regularization parameter for P matrix initialization
+   * Controls initial uncertainty: P(0) = δ * I
+   * - Larger values (1.0): More initial uncertainty, faster initial convergence
+   * - Smaller values (0.01): Less initial uncertainty, slower startup
+   * Typical range: 0.01 to 1.0
+   * Default: 0.01
+   */
+  delta?: number;
+}
+
+/**
  * Tap callback function for inspecting samples at any point in the pipeline
  * @param samples - Float32Array view of the current samples
  * @param stageName - Name of the pipeline stage
