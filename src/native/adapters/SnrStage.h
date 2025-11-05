@@ -110,7 +110,8 @@ namespace dsp::adapters
                 }
                 else
                 {
-                    snr_db = 10.0f * std::log10f((signal_power + epsilon) / (noise_power + epsilon));
+                    // log10f is in global namespace on some platforms (Linux/GCC), std:: on others (MSVC)
+                    snr_db = 10.0f * log10f((signal_power + epsilon) / (noise_power + epsilon));
                     snr_db = std::max(min_db, std::min(max_db, snr_db)); // Clamp [-100, 100]
                 }
 
