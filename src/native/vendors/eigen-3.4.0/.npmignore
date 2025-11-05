@@ -1,0 +1,20 @@
+# Override Eigen's .gitignore for npm package distribution
+# The parent .gitignore has "core" pattern which blocks Eigen/Core header
+# We MUST include Core for the package to build
+
+# Include everything by default (negate the parent .gitignore)
+!*
+!*/
+
+# Explicitly include Core files (redundant but explicit)
+!Eigen/Core
+!Eigen/src/Core/
+!Eigen/src/Core/**
+
+# Still exclude actual build artifacts
+build*/
+CMakeCache.txt
+*.pyc
+*.log
+*.orig
+*.rej
