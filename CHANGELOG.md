@@ -1,5 +1,11 @@
 # dspx
 
+## 1.0.0-alpha.18
+
+### Major Changes
+
+- [`653a144`](https://github.com/A-KGeorge/dspx/commit/653a144fd3260d7a17150c49d7dcf26a4f7cfc01) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - added fft batch and cached it
+
 ## 0.2.0-alpha.17
 
 ### Minor Changes
