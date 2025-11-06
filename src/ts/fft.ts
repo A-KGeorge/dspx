@@ -723,3 +723,151 @@ export namespace FftUtils {
     return padded;
   }
 }
+
+/**
+ * Parallel batch FFT processor with result caching
+ *
+ * Processes multiple FFTs concurrently using a thread pool, with optional
+ * caching to eliminate redundant computation for repeated signals.
+ *
+ * @example
+ * ```typescript
+ * // Process multiple audio channels in parallel
+ * const processor = new FftBatchProcessor({
+ *   numThreads: 8,      // Use 8 worker threads
+ *   enableCache: true,  // Enable result caching
+ *   cacheSize: 256      // Cache up to 256 unique signals
+ * });
+ *
+ * const channels: Float32Array[] = [...]; // 16 audio channels
+ * const signals = channels.map(ch => ({ input: ch }));
+ * const spectra = processor.processBatch(signals);
+ *
+ * console.log(`Threads: ${processor.getNumThreads()}`);
+ * console.log(`Cache hit rate: ${(processor.getCacheHitRate() * 100).toFixed(1)}%`);
+ * ```
+ *
+ * @example
+ * ```typescript
+ * // Batch spectrogram generation
+ * const windowSize = 1024;
+ * const hopSize = 256;
+ * const windows: Float32Array[] = extractWindows(audio, windowSize, hopSize);
+ *
+ * const processor = new FftBatchProcessor({ numThreads: 4 });
+ * const spectrogram = processor.processBatch(
+ *   windows.map(w => ({ input: w }))
+ * );
+ * ```
+ */
+export class FftBatchProcessor {
+  private processor: any;
+
+  /**
+   * Create a new parallel batch FFT processor
+   *
+   * @param options Configuration options
+   * @param options.numThreads Number of worker threads (0 = auto-detect physical cores)
+   * @param options.enableCache Enable FFT result caching (default: true)
+   * @param options.cacheSize Maximum number of cache entries (default: 128)
+   */
+  constructor(options?: {
+    numThreads?: number;
+    enableCache?: boolean;
+    cacheSize?: number;
+  }) {
+    this.processor = new DspAddon.FftBatchProcessor(options || {});
+  }
+
+  /**
+   * Process multiple FFTs in parallel
+   *
+   * Takes an array of signals and computes their FFTs concurrently using
+   * a thread pool. Each signal is a real-valued input that will be
+   * processed using RFFT (Real FFT).
+   *
+   * @param signals Array of input signals, each with a Float32Array input
+   * @returns Array of complex spectra (one per input signal)
+   *
+   * @example
+   * ```typescript
+   * const signals = [
+   *   { input: new Float32Array([1, 2, 3, 4]) },
+   *   { input: new Float32Array([5, 6, 7, 8]) }
+   * ];
+   *
+   * const spectra = processor.processBatch(signals);
+   * // spectra[0] = { real: Float32Array, imag: Float32Array }
+   * // spectra[1] = { real: Float32Array, imag: Float32Array }
+   * ```
+   */
+  processBatch(signals: Array<{ input: Float32Array }>): ComplexArray[] {
+    return this.processor.processBatch(signals);
+  }
+
+  /**
+   * Get cache hit rate (0.0 to 1.0)
+   *
+   * Returns the fraction of FFT requests that were served from cache
+   * rather than requiring computation. Higher is better.
+   *
+   * @returns Cache hit rate between 0.0 (no cache hits) and 1.0 (all hits)
+   *
+   * @example
+   * ```typescript
+   * const hitRate = processor.getCacheHitRate();
+   * console.log(`${(hitRate * 100).toFixed(1)}% cache hits`);
+   * ```
+   */
+  getCacheHitRate(): number {
+    return this.processor.getCacheHitRate();
+  }
+
+  /**
+   * Get detailed cache statistics
+   *
+   * @returns Object with hits, misses, and hit rate
+   *
+   * @example
+   * ```typescript
+   * const stats = processor.getCacheStats();
+   * console.log(`Hits: ${stats.hits}, Misses: ${stats.misses}`);
+   * console.log(`Hit rate: ${(stats.hitRate * 100).toFixed(1)}%`);
+   * ```
+   */
+  getCacheStats(): { hits: number; misses: number; hitRate: number } {
+    return this.processor.getCacheStats();
+  }
+
+  /**
+   * Clear the FFT result cache
+   *
+   * Removes all cached FFT results and resets cache statistics.
+   * Useful for benchmarking or when processing data with different
+   * characteristics.
+   *
+   * @example
+   * ```typescript
+   * processor.clearCache();
+   * // Next batch will have 0% cache hit rate
+   * ```
+   */
+  clearCache(): void {
+    this.processor.clearCache();
+  }
+
+  /**
+   * Get number of worker threads
+   *
+   * @returns The number of threads used for parallel processing
+   *
+   * @example
+   * ```typescript
+   * const numThreads = processor.getNumThreads();
+   * console.log(`Using ${numThreads} threads`);
+   * ```
+   */
+  getNumThreads(): number {
+    return this.processor.getNumThreads();
+  }
+}

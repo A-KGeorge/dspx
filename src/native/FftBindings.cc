@@ -11,6 +11,7 @@
 #include <napi.h>
 #include "core/FftEngine.h"
 #include "core/MovingFftFilter.h"
+#include "core/FftBatchProcessor.h"
 #include "utils/NapiUtils.h"
 #include <memory>
 
@@ -79,6 +80,26 @@ namespace dsp
         Napi::Value GetPowerSpectrum(const Napi::CallbackInfo &info);
         Napi::Value GetPhaseSpectrum(const Napi::CallbackInfo &info);
         Napi::Value GetFrequencyBins(const Napi::CallbackInfo &info);
+    };
+
+    /**
+     * FftBatchProcessorWrapper - Wraps FftBatchProcessor for TypeScript
+     */
+    class FftBatchProcessorWrapper : public Napi::ObjectWrap<FftBatchProcessorWrapper>
+    {
+    public:
+        static Napi::Object Init(Napi::Env env, Napi::Object exports);
+        FftBatchProcessorWrapper(const Napi::CallbackInfo &info);
+        ~FftBatchProcessorWrapper();
+
+    private:
+        std::unique_ptr<dsp::core::FftBatchProcessor<float>> m_processor;
+
+        Napi::Value ProcessBatch(const Napi::CallbackInfo &info);
+        Napi::Value GetCacheHitRate(const Napi::CallbackInfo &info);
+        Napi::Value GetCacheStats(const Napi::CallbackInfo &info);
+        Napi::Value ClearCache(const Napi::CallbackInfo &info);
+        Napi::Value GetNumThreads(const Napi::CallbackInfo &info);
     };
 
     // ========== FftProcessor Implementation ==========
@@ -859,6 +880,196 @@ namespace dsp
         return result;
     }
 
+    // ========== FftBatchProcessorWrapper Implementation ==========
+
+    Napi::Object FftBatchProcessorWrapper::Init(Napi::Env env, Napi::Object exports)
+    {
+        Napi::Function func = DefineClass(env, "FftBatchProcessor", {InstanceMethod("processBatch", &FftBatchProcessorWrapper::ProcessBatch), InstanceMethod("getCacheHitRate", &FftBatchProcessorWrapper::GetCacheHitRate), InstanceMethod("getCacheStats", &FftBatchProcessorWrapper::GetCacheStats), InstanceMethod("clearCache", &FftBatchProcessorWrapper::ClearCache), InstanceMethod("getNumThreads", &FftBatchProcessorWrapper::GetNumThreads)});
+
+        Napi::FunctionReference *constructor = new Napi::FunctionReference();
+        *constructor = Napi::Persistent(func);
+        exports.Set("FftBatchProcessor", func);
+
+        return exports;
+    }
+
+    FftBatchProcessorWrapper::FftBatchProcessorWrapper(const Napi::CallbackInfo &info)
+        : Napi::ObjectWrap<FftBatchProcessorWrapper>(info)
+    {
+        Napi::Env env = info.Env();
+
+        // Parse options: { numThreads?: number, enableCache?: boolean, cacheSize?: number }
+        size_t numThreads = 0; // Auto-detect
+        bool enableCache = true;
+        size_t cacheSize = 128;
+
+        if (info.Length() > 0 && info[0].IsObject())
+        {
+            Napi::Object options = info[0].As<Napi::Object>();
+
+            if (options.Has("numThreads"))
+            {
+                numThreads = options.Get("numThreads").As<Napi::Number>().Uint32Value();
+            }
+
+            if (options.Has("enableCache"))
+            {
+                enableCache = options.Get("enableCache").As<Napi::Boolean>().Value();
+            }
+
+            if (options.Has("cacheSize"))
+            {
+                cacheSize = options.Get("cacheSize").As<Napi::Number>().Uint32Value();
+            }
+        }
+
+        m_processor = std::make_unique<dsp::core::FftBatchProcessor<float>>(
+            numThreads, enableCache, cacheSize);
+    }
+
+    FftBatchProcessorWrapper::~FftBatchProcessorWrapper()
+    {
+        // Processor will be destroyed automatically
+    }
+
+    Napi::Value FftBatchProcessorWrapper::ProcessBatch(const Napi::CallbackInfo &info)
+    {
+        Napi::Env env = info.Env();
+
+        // Validate input: expects array of { input: Float32Array }
+        if (info.Length() < 1 || !info[0].IsArray())
+        {
+            Napi::TypeError::New(env, "Expected array of signals").ThrowAsJavaScriptException();
+            return env.Null();
+        }
+
+        Napi::Array signalsArray = info[0].As<Napi::Array>();
+        uint32_t numSignals = signalsArray.Length();
+
+        if (numSignals == 0)
+        {
+            return Napi::Array::New(env, 0);
+        }
+
+        // Parse input signals
+        std::vector<Napi::Float32Array> inputArrays;
+        std::vector<size_t> lengths;
+        inputArrays.reserve(numSignals);
+        lengths.reserve(numSignals);
+
+        for (uint32_t i = 0; i < numSignals; ++i)
+        {
+            Napi::Value signalValue = signalsArray.Get(i);
+            if (!signalValue.IsObject())
+            {
+                Napi::TypeError::New(env, "Each signal must be an object with 'input' property")
+                    .ThrowAsJavaScriptException();
+                return env.Null();
+            }
+
+            Napi::Object signalObj = signalValue.As<Napi::Object>();
+            if (!signalObj.Has("input"))
+            {
+                Napi::TypeError::New(env, "Signal object must have 'input' property")
+                    .ThrowAsJavaScriptException();
+                return env.Null();
+            }
+
+            Napi::Value inputValue = signalObj.Get("input");
+            if (!inputValue.IsTypedArray())
+            {
+                Napi::TypeError::New(env, "Signal 'input' must be a Float32Array")
+                    .ThrowAsJavaScriptException();
+                return env.Null();
+            }
+
+            Napi::Float32Array inputArray = inputValue.As<Napi::Float32Array>();
+            inputArrays.push_back(inputArray);
+            lengths.push_back(inputArray.ElementLength());
+        }
+
+        // Allocate output buffers
+        std::vector<std::vector<dsp::core::FftBatchProcessor<float>::Complex>> outputs;
+        outputs.reserve(numSignals);
+
+        for (size_t i = 0; i < numSignals; ++i)
+        {
+            size_t outputSize = lengths[i] / 2 + 1; // RFFT output size
+            outputs.emplace_back(outputSize);
+        }
+
+        // Create batch jobs
+        std::vector<dsp::core::FftBatchProcessor<float>::BatchJob> jobs(numSignals);
+        for (size_t i = 0; i < numSignals; ++i)
+        {
+            jobs[i].input = inputArrays[i].Data();
+            jobs[i].output = outputs[i].data();
+            jobs[i].length = lengths[i];
+            jobs[i].isRealInput = true;
+            jobs[i].forward = true;
+        }
+
+        // Process batch
+        m_processor->processBatch(jobs.data(), numSignals, true);
+
+        // Convert results to JS arrays
+        Napi::Array results = Napi::Array::New(env, numSignals);
+
+        for (uint32_t i = 0; i < numSignals; ++i)
+        {
+            size_t outputSize = outputs[i].size();
+
+            // Create ComplexArray: { real: Float32Array, imag: Float32Array }
+            Napi::Float32Array realArray = Napi::Float32Array::New(env, outputSize);
+            Napi::Float32Array imagArray = Napi::Float32Array::New(env, outputSize);
+
+            for (size_t j = 0; j < outputSize; ++j)
+            {
+                realArray[j] = outputs[i][j].real();
+                imagArray[j] = outputs[i][j].imag();
+            }
+
+            Napi::Object complexArray = Napi::Object::New(env);
+            complexArray.Set("real", realArray);
+            complexArray.Set("imag", imagArray);
+
+            results.Set(i, complexArray);
+        }
+
+        return results;
+    }
+
+    Napi::Value FftBatchProcessorWrapper::GetCacheHitRate(const Napi::CallbackInfo &info)
+    {
+        Napi::Env env = info.Env();
+        double hitRate = m_processor->getCacheHitRate();
+        return Napi::Number::New(env, hitRate);
+    }
+
+    Napi::Value FftBatchProcessorWrapper::GetCacheStats(const Napi::CallbackInfo &info)
+    {
+        Napi::Env env = info.Env();
+
+        Napi::Object stats = Napi::Object::New(env);
+        stats.Set("hits", Napi::Number::New(env, m_processor->getCacheHits()));
+        stats.Set("misses", Napi::Number::New(env, m_processor->getCacheMisses()));
+        stats.Set("hitRate", Napi::Number::New(env, m_processor->getCacheHitRate()));
+
+        return stats;
+    }
+
+    Napi::Value FftBatchProcessorWrapper::ClearCache(const Napi::CallbackInfo &info)
+    {
+        m_processor->clearCache();
+        return info.Env().Undefined();
+    }
+
+    Napi::Value FftBatchProcessorWrapper::GetNumThreads(const Napi::CallbackInfo &info)
+    {
+        Napi::Env env = info.Env();
+        return Napi::Number::New(env, m_processor->getNumThreads());
+    }
+
     /**
      * Autocorrelation - FFT-based autocorrelation utility function
      *
@@ -1092,6 +1303,7 @@ namespace dsp
     {
         FftProcessor::Init(env, exports);
         MovingFftProcessor::Init(env, exports);
+        FftBatchProcessorWrapper::Init(env, exports);
 
         // Export autocorrelation utility function
         exports.Set("autocorrelation", Napi::Function::New(env, Autocorrelation));
