@@ -1,5 +1,11 @@
 # dspx
 
+## 0.2.0-alpha.17
+
+### Minor Changes
+
+- [`546583f`](https://github.com/A-KGeorge/dspx/commit/546583f45be6e4c1e907eb08d6d735a2059cd3ec) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - added core from eigen to .npmignore
+
 ## 0.2.0-alpha.16
 
 ### Minor Changes
