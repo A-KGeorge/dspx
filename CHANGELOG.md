@@ -1,5 +1,12 @@
 # dspx
 
+## 1.0.1
+
+### Patch Changes
+
+- Fixed parks-mcclellan example file
+- Updated licensing documentation (FFTPACK public domain, Eigen MPL-2.0)
+
 ## 1.0.0
 
 ### Major Changes
