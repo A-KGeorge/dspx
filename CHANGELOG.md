@@ -1,5 +1,11 @@
 # dspx
 
+## 1.0.0-undefined.19
+
+### Major Changes
+
+- [`26bc66f`](https://github.com/A-KGeorge/dspx/commit/26bc66f0abbb64bb2a8f5c95937c68cfb41cc5db) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - fixed examples
+
 ## 1.0.0-alpha.18
 
 ### Major Changes
