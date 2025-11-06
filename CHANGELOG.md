@@ -1,10 +1,26 @@
 # dspx
 
-## 1.0.0-undefined.19
+## 1.0.0
 
 ### Major Changes
 
-- [`26bc66f`](https://github.com/A-KGeorge/dspx/commit/26bc66f0abbb64bb2a8f5c95937c68cfb41cc5db) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - fixed examples
+- **First stable release!** 🎉
+- Parallel FFT batch processing with thread pool and LRU caching
+- Comprehensive DSP pipeline with 40+ processing stages
+- Native C++ acceleration with SIMD optimizations (AVX2, NEON)
+- Redis-backed state persistence for distributed processing
+- TypeScript/JavaScript API with full type safety
+- Cross-platform support: Windows, macOS (x64/ARM64), Linux
+
+### Features Included
+
+- **Filters**: FIR, IIR, Notch, Bandpass, Highpass, Lowpass, Bessel, Butterworth, Chebyshev
+- **FFT**: Forward/inverse FFT with batch processing and caching (100x speedup for repeated signals)
+- **Time-Series**: Irregular timestamp support, interpolation, resampling
+- **Matrix Analysis**: Covariance, eigendecomposition, whitening
+- **Spatial Filters**: Beamforming, CSP (Common Spatial Patterns), channel selection
+- **Advanced**: Wavelet transforms, Hilbert envelope, adaptive filters (LMS, NLMS, RLS)
+- **Utilities**: Moving average, variance, rectification, peak detection, envelope detection
 
 ## 1.0.0-alpha.18
 

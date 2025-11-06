@@ -1,5 +1,0 @@
----
-"dspx": major
----
-
-fixed examples
