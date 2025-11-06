@@ -2,241 +2,233 @@
  * Parks-McClellan Optimal FIR Filter Example
  *
  * This example demonstrates how to use optimal FIR coefficients
- * designed with the Parks-McClellan algorithm for 30-50% better
- * performance compared to window-based designs.
+ * designed with the Parks-McClellan algorithm for better performance
+ * compared to window-based designs.
+ *
+ * Prerequisites:
+ * 1. Design coefficients using Python script:
+ *    python scripts/design_optimal_fir.py --type lowpass --taps 87 --cutoff 0.2 --output lowpass.json
  */
 
-import { FirFilter, Convolution } from "../src/ts/bindings";
+import { createDspPipeline } from "../dist/index.js";
 import * as fs from "fs";
 
 // ============================================================================
-// Method 1: Load from JSON file (recommended for development)
+// Example 1: Use optimal coefficients in pipeline
 // ============================================================================
 
-function loadOptimalFilter() {
-  // Load the coefficients from the JSON file
+async function useOptimalFilterInPipeline() {
+  console.log("\n=== Example 1: Optimal Filter in Pipeline ===\n");
+
+  // Load optimal coefficients from JSON file
   const coeffsJson = JSON.parse(fs.readFileSync("./lowpass.json", "utf-8"));
   const coeffs = new Float32Array(coeffsJson);
 
   console.log(`Loaded ${coeffs.length} optimal FIR coefficients`);
 
-  // Create filter with optimal coefficients
-  const filter = new FirFilter(coeffs, true); // true = stateful
+  // Create pipeline with convolution stage
+  const pipeline = createDspPipeline();
+  pipeline.convolution({ kernel: coeffs });
 
-  return filter;
-}
-
-// ============================================================================
-// Method 2: Use Convolution stage in pipeline (for streaming data)
-// ============================================================================
-
-function createOptimalConvolutionStage() {
-  const coeffsJson = JSON.parse(fs.readFileSync("./lowpass.json", "utf-8"));
-  const kernel = new Float32Array(coeffsJson);
-
-  // Use in pipeline
-  const convolution = new Convolution({ kernel });
-
-  return convolution;
-}
-
-// ============================================================================
-// Method 3: Embed coefficients directly (for production)
-// ============================================================================
-
-// For production, you can export coefficients as TypeScript:
-// python scripts/design_optimal_fir.py --type lowpass --taps 87 --cutoff 0.2 --format typescript --output optimal-lowpass.ts
-// Then import: import { OPTIMAL_FIR_COEFFS } from './optimal-lowpass';
-
-// ============================================================================
-// Performance Comparison
-// ============================================================================
-
-function comparePerformance() {
-  console.log("\n=== Performance Comparison ===\n");
-
-  // Load optimal 87-tap filter (Parks-McClellan)
-  const optimalCoeffs = new Float32Array(
-    JSON.parse(fs.readFileSync("./lowpass.json", "utf-8"))
-  );
-  const optimalFilter = new FirFilter(optimalCoeffs, true);
-
-  // Create traditional 128-tap filter (window-based design)
-  const traditionalFilter = FirFilter.createLowPass({
-    sampleRate: 1000,
-    cutoffFrequency: 100, // 0.2π normalized
-    transitionWidth: 25,
-    stateful: true,
-  });
-
-  // Generate test signal (10,000 samples)
-  const signalLength = 10_000;
-  const testSignal = new Float32Array(signalLength);
-  for (let i = 0; i < signalLength; i++) {
-    testSignal[i] =
-      Math.sin(2 * Math.PI * 0.1 * i) + // Signal
-      Math.sin(2 * Math.PI * 0.4 * i); // Noise
-  }
-
-  // Benchmark optimal filter (87 taps)
-  console.log("Testing optimal Parks-McClellan filter (87 taps)...");
-  const optimalStart = performance.now();
-  const optimalOutput = optimalFilter.process(testSignal);
-  const optimalTime = performance.now() - optimalStart;
-
-  // Reset traditional filter
-  traditionalFilter.reset();
-
-  // Benchmark traditional filter (128 taps)
-  console.log("Testing traditional window-based filter (128 taps)...");
-  const traditionalStart = performance.now();
-  const traditionalOutput = traditionalFilter.process(testSignal);
-  const traditionalTime = performance.now() - traditionalStart;
-
-  // Results
-  console.log("\nResults:");
-  console.log(`  Optimal (87 taps):      ${optimalTime.toFixed(2)} ms`);
-  console.log(`  Traditional (128 taps): ${traditionalTime.toFixed(2)} ms`);
-  console.log(
-    `  Speedup:                ${(traditionalTime / optimalTime).toFixed(
-      2
-    )}x (${(100 * (1 - optimalTime / traditionalTime)).toFixed(1)}% faster)`
-  );
-  console.log(
-    `  Tap reduction:          ${((1 - 87 / 128) * 100).toFixed(1)}% fewer taps`
-  );
-
-  // Verify both filters produce similar results
-  let maxDiff = 0;
-  for (let i = 0; i < optimalOutput.length; i++) {
-    const diff = Math.abs(optimalOutput[i] - traditionalOutput[i]);
-    if (diff > maxDiff) maxDiff = diff;
-  }
-  console.log(
-    `  Maximum difference:     ${maxDiff.toExponential(2)} (negligible)`
-  );
-}
-
-// ============================================================================
-// Real-world Usage Example: EEG Signal Processing
-// ============================================================================
-
-function processEEGSignal() {
-  console.log("\n=== EEG Signal Processing Example ===\n");
-
-  // Load optimal bandpass filter for EEG (0.5-40 Hz @ 250 Hz sampling)
-  // First design it:
-  // python scripts/design_optimal_fir.py --type bandpass --taps 101 --bands 0.004,0.32 --output eeg_bandpass.json
-
-  const coeffs = new Float32Array(
-    JSON.parse(fs.readFileSync("./lowpass.json", "utf-8"))
-  );
-
-  const filter = new FirFilter(coeffs, true);
-
-  // Simulate EEG signal with artifacts
-  const eegData = new Float32Array(2500); // 10 seconds @ 250 Hz
-  for (let i = 0; i < eegData.length; i++) {
-    const t = i / 250;
-    eegData[i] =
-      50 * Math.sin(2 * Math.PI * 10 * t) + // Alpha wave (10 Hz)
-      20 * Math.sin(2 * Math.PI * 8 * t) + // Theta wave (8 Hz)
-      10 * Math.sin(2 * Math.PI * 60 * t) + // 60 Hz noise (filtered out)
-      5 * Math.random(); // Random noise
-  }
-
-  // Filter the signal
-  const start = performance.now();
-  const filtered = filter.process(eegData);
-  const elapsed = performance.now() - start;
-
-  console.log(`Processed 10 seconds of EEG data in ${elapsed.toFixed(2)} ms`);
-  console.log(
-    `Throughput: ${((eegData.length / elapsed) * 1000).toFixed(0)} samples/sec`
-  );
-  console.log(
-    `Real-time factor: ${(2500 / 250 / (elapsed / 1000)).toFixed(1)}x`
-  );
-}
-
-// ============================================================================
-// Pipeline Example: Multi-stage Processing
-// ============================================================================
-
-function pipelineExample() {
-  console.log("\n=== Pipeline Example ===\n");
-
-  const { DspPipeline } = require("../src/ts/bindings");
-
-  // Load optimal coefficients
-  const lowpassCoeffs = new Float32Array(
-    JSON.parse(fs.readFileSync("./lowpass.json", "utf-8"))
-  );
-
-  // Create pipeline with optimal convolution stage
-  const pipeline = new DspPipeline(1000); // 1000 Hz sample rate
-
-  // Add stages
-  pipeline.addStage(new Convolution({ kernel: lowpassCoeffs }));
-  // You can add more stages here...
-
-  // Generate test signal
-  const signal = new Float32Array(5000);
+  // Generate test signal with signal (0.1π) and noise (0.4π)
+  const signal = new Float32Array(1000);
   for (let i = 0; i < signal.length; i++) {
     signal[i] =
-      Math.sin(2 * Math.PI * 0.1 * i) + 0.5 * Math.sin(2 * Math.PI * 0.4 * i);
+      Math.sin(2 * Math.PI * 0.1 * i) + // Signal
+      0.5 * Math.sin(2 * Math.PI * 0.4 * i); // Noise
+  }
+
+  // Process signal
+  const start = performance.now();
+  const output = await pipeline.process(signal, { channels: 1 });
+  const elapsed = performance.now() - start;
+
+  console.log(
+    `✓ Processed ${signal.length} samples in ${elapsed.toFixed(2)}ms`
+  );
+  console.log(
+    `✓ Throughput: ${((signal.length / elapsed) * 1000).toFixed(0)} samples/sec`
+  );
+  console.log(`✓ Using ${coeffs.length}-tap optimal filter\n`);
+
+  return output;
+}
+
+// ============================================================================
+// Example 2: Coefficient Comparison
+// ============================================================================
+
+async function compareCoefficients() {
+  console.log("\n=== Example 2: Coefficient Analysis ===\n");
+
+  // Load optimal coefficients
+  const coeffsJson = JSON.parse(fs.readFileSync("./lowpass.json", "utf-8"));
+  const optimalCoeffs = new Float32Array(coeffsJson);
+
+  console.log("Optimal FIR Coefficients (Parks-McClellan):");
+  console.log(`  Length: ${optimalCoeffs.length} taps`);
+  console.log(
+    `  First 5 coefficients: [${Array.from(optimalCoeffs.slice(0, 5))
+      .map((c) => c.toFixed(6))
+      .join(", ")}]`
+  );
+  console.log(
+    `  Center coefficient: ${optimalCoeffs[
+      Math.floor(optimalCoeffs.length / 2)
+    ].toFixed(6)}`
+  );
+
+  // Calculate sum of coefficients (DC gain)
+  const dcGain = optimalCoeffs.reduce((sum, c) => sum + c, 0);
+  console.log(`  DC Gain: ${dcGain.toFixed(6)} (normalized sum)`);
+
+  // Calculate energy
+  const energy = Math.sqrt(optimalCoeffs.reduce((sum, c) => sum + c * c, 0));
+  console.log(`  Energy: ${energy.toFixed(6)}\n`);
+}
+
+// ============================================================================
+// Example 3: Multi-stage Pipeline with Optimal Filter
+// ============================================================================
+
+async function multiStagePipeline() {
+  console.log("\n=== Example 3: Multi-Stage Processing ===\n");
+
+  // Load optimal lowpass coefficients
+  const coeffsJson = JSON.parse(fs.readFileSync("./lowpass.json", "utf-8"));
+  const lowpassCoeffs = new Float32Array(coeffsJson);
+
+  // Create pipeline with multiple stages
+  const pipeline = createDspPipeline();
+
+  // Stage 1: Optimal lowpass filter (removes high-frequency noise)
+  pipeline.convolution({ kernel: lowpassCoeffs });
+
+  // Stage 2: Rectification (for envelope detection)
+  pipeline.Rectify({ mode: "full" });
+
+  // Stage 3: Moving average (smoothing)
+  pipeline.MovingAverage({ mode: "moving", windowSize: 10 });
+
+  // Generate test signal: 10 Hz sine wave with 60 Hz noise
+  const signal = new Float32Array(2500); // 10 seconds @ 250 Hz
+  for (let i = 0; i < signal.length; i++) {
+    const t = i / 250;
+    signal[i] =
+      Math.sin(2 * Math.PI * 10 * t) + // 10 Hz signal
+      0.3 * Math.sin(2 * Math.PI * 60 * t) + // 60 Hz noise
+      0.1 * Math.random(); // Random noise
   }
 
   // Process through pipeline
   const start = performance.now();
-  const output = pipeline.process(signal);
+  const output = await pipeline.process(signal, { channels: 1 });
   const elapsed = performance.now() - start;
 
+  console.log(`✓ Pipeline stages: Convolution → Rectify → MovingAverage`);
   console.log(
-    `Pipeline processed ${signal.length} samples in ${elapsed.toFixed(2)} ms`
+    `✓ Processed ${signal.length} samples in ${elapsed.toFixed(2)}ms`
   );
-  console.log(`Using optimal ${lowpassCoeffs.length}-tap filter`);
+  console.log(
+    `✓ Throughput: ${((signal.length / elapsed) * 1000).toFixed(
+      0
+    )} samples/sec\n`
+  );
+
+  return output;
+}
+
+// ============================================================================
+// Example 4: Performance Benchmarking
+// ============================================================================
+
+async function benchmarkPerformance() {
+  console.log("\n=== Example 4: Performance Benchmark ===\n");
+
+  const coeffsJson = JSON.parse(fs.readFileSync("./lowpass.json", "utf-8"));
+  const coeffs = new Float32Array(coeffsJson);
+
+  const pipeline = createDspPipeline();
+  pipeline.convolution({ kernel: coeffs });
+
+  // Test different signal lengths
+  const lengths = [1000, 5000, 10000, 50000];
+
+  console.log(
+    `Testing ${coeffs.length}-tap optimal filter with different signal lengths:\n`
+  );
+  console.log("Length | Time (ms) | Throughput (M samples/sec)");
+  console.log("-------|-----------|---------------------------");
+
+  for (const length of lengths) {
+    const signal = new Float32Array(length);
+    for (let i = 0; i < length; i++) {
+      signal[i] = Math.sin(2 * Math.PI * 0.1 * i);
+    }
+
+    // Warmup
+    await pipeline.process(signal, { channels: 1 });
+
+    // Measure
+    const iterations = 10;
+    const start = performance.now();
+    for (let i = 0; i < iterations; i++) {
+      await pipeline.process(signal, { channels: 1 });
+    }
+    const elapsed = performance.now() - start;
+    const avgTime = elapsed / iterations;
+    const throughput = ((length / avgTime) * 1000) / 1e6;
+
+    console.log(
+      `${length.toString().padStart(6)} | ${avgTime
+        .toFixed(2)
+        .padStart(9)} | ${throughput.toFixed(2).padStart(26)}`
+    );
+  }
+  console.log();
 }
 
 // ============================================================================
 // Main
 // ============================================================================
 
-function main() {
+async function main() {
   console.log("Parks-McClellan Optimal FIR Filter Examples");
-  console.log("============================================\n");
+  console.log("============================================");
 
   try {
-    // Method 1: Basic usage
-    console.log("Method 1: Loading optimal filter from JSON...");
-    const filter = loadOptimalFilter();
-    console.log("✅ Filter created successfully\n");
+    // Example 1: Basic usage
+    await useOptimalFilterInPipeline();
 
-    // Method 2: Convolution stage
-    console.log("Method 2: Creating convolution stage...");
-    const convolution = createOptimalConvolutionStage();
-    console.log("✅ Convolution stage created successfully\n");
+    // Example 2: Analyze coefficients
+    await compareCoefficients();
 
-    // Performance comparison
-    comparePerformance();
+    // Example 3: Multi-stage pipeline
+    await multiStagePipeline();
 
-    // Real-world example
-    processEEGSignal();
+    // Example 4: Performance benchmark
+    await benchmarkPerformance();
 
-    // Pipeline example
-    pipelineExample();
-  } catch (error) {
-    console.error("Error:", error);
-    console.log("\nMake sure you have run:");
+    console.log("✅ All examples completed successfully!");
+  } catch (error: any) {
+    console.error("❌ Error:", error.message);
+    console.log("\nMake sure you have:");
+    console.log("  1. Built the project: npm run build");
+    console.log("  2. Created optimal coefficients:");
     console.log(
-      "  python scripts/design_optimal_fir.py --type lowpass --taps 87 --cutoff 0.2 --output lowpass.json"
+      "     python scripts/design_optimal_fir.py --type lowpass --taps 87 --cutoff 0.2 --output lowpass.json"
     );
   }
 }
 
 // Run if executed directly
 if (require.main === module) {
-  main();
+  main().catch(console.error);
 }
 
-export { loadOptimalFilter, createOptimalConvolutionStage, comparePerformance };
+export {
+  useOptimalFilterInPipeline,
+  compareCoefficients,
+  multiStagePipeline,
+  benchmarkPerformance,
+};

@@ -7,7 +7,7 @@
 
 > **A production-ready, high-performance DSP library with native C++ acceleration, Redis state persistence, and comprehensive time-series processing. Built for Node.js backends processing real-time biosignals, audio, and sensor data.**
 
-** v1.0.0 Release** Fully tested (606/606 tests passing), battle-tested architecture, comprehensive documentation. Ready for production workloads.
+** v1.0.0 Release** Fully tested (500+ tests passing), battle-tested architecture, comprehensive documentation. Ready for production workloads.
 
 A modern DSP library built for Node.js backends processing real-time biosignals, audio streams, and sensor data. Features native C++ filters with full state serialization to Redis, enabling seamless processing across service restarts and distributed workers.
 
