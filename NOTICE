@@ -10,11 +10,17 @@ See the LICENSE file for details.
 
 ## Third-Party Components
 
-FFTPACK (Apache License 2.0)
-Copyright (c) 2004–2016 University Corporation for Atmospheric Research / NCAR
-Developed by Paul N. Swarztrauber  
-https://www.netlib.org/fftpack/
+### FFTPACK (Public Domain)
 
-Eigen (MPL-2.0)
+Originally authored by Paul N. Swarztrauber of NCAR.
+Source: https://www.netlib.org/fftpack/
+FFTPACK is believed to be in the public domain.
+Portions adapted and optimized by Alan Kochukalam George.
+
+### Eigen (Mozilla Public License 2.0)
+
 Copyright (C) Eigen contributors
 https://eigen.tuxfamily.org
+Licensed under the Mozilla Public License Version 2.0 (MPL-2.0).
+The full text of the MPL-2.0 license can be found at:
+https://www.mozilla.org/en-US/MPL/2.0/
