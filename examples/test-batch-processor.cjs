@@ -2,14 +2,14 @@
  * Quick test of the new FftBatchProcessor
  */
 
-const { FftBatchProcessor } = require('../dist/fft.js');
+const { FftBatchProcessor } = require("../dist/fft.js");
 
-console.log('Testing FftBatchProcessor...\n');
+console.log("Testing FftBatchProcessor...\n");
 
 // Create processor
 const processor = new FftBatchProcessor({
-    numThreads: 4,
-    enableCache: true
+  numThreads: 4,
+  enableCache: true,
 });
 
 console.log(`✓ Created processor with ${processor.getNumThreads()} threads`);
@@ -20,14 +20,16 @@ const signalLength = 1024;
 const signals = [];
 
 for (let i = 0; i < numSignals; i++) {
-    const signal = new Float32Array(signalLength);
-    for (let j = 0; j < signalLength; j++) {
-        signal[j] = Math.sin(2 * Math.PI * (100 + i * 50) * j / 44100);
-    }
-    signals.push({ input: signal });
+  const signal = new Float32Array(signalLength);
+  for (let j = 0; j < signalLength; j++) {
+    signal[j] = Math.sin((2 * Math.PI * (100 + i * 50) * j) / 44100);
+  }
+  signals.push({ input: signal });
 }
 
-console.log(`✓ Generated ${numSignals} test signals (${signalLength} samples each)`);
+console.log(
+  `✓ Generated ${numSignals} test signals (${signalLength} samples each)`
+);
 
 // Process batch
 const start = Date.now();
@@ -51,8 +53,10 @@ const warmTime = Date.now() - warmStart;
 const stats = processor.getCacheStats();
 console.log(`\n✓ Cache test:`);
 console.log(`  Cold run: ${coldTime}ms`);
-console.log(`  Warm run: ${warmTime}ms (${(coldTime / warmTime).toFixed(1)}x faster)`);
+console.log(
+  `  Warm run: ${warmTime}ms (${(coldTime / warmTime).toFixed(1)}x faster)`
+);
 console.log(`  Hit rate: ${(stats.hitRate * 100).toFixed(1)}%`);
 console.log(`  Hits: ${stats.hits}, Misses: ${stats.misses}`);
 
-console.log('\n✅ All tests passed!');
+console.log("\n✅ All tests passed!");
