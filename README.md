@@ -1,7 +1,7 @@
 # dspx
 
 [![npm version](https://img.shields.io/badge/npm-v1.0.0-brightgreen)](https://www.npmjs.com/package/dspx)
-[![Tests](https://img.shields.io/badge/tests-606%20passing-brightgreen)](#-quick-start)
+[![Tests](https://img.shields.io/badge/tests-500%2B%20passing-brightgreen)](#-quick-start)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](./LICENSE)
 

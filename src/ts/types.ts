@@ -1243,3 +1243,256 @@ export interface CrossCorrelationOptions {
   // Currently no options, but interface reserved for future extensions
   // (e.g., normalization, mode selection, max lag)
 }
+
+/**
+ * Parameters for FFT processing in pipeline
+ */
+export interface fftParams {
+  /** FFT size (must be power of 2 for FFT, any size for DFT) */
+  size: number;
+
+  /**
+   * Transform type
+   * - 'fft': Fast Fourier Transform (O(N log N), requires power of 2)
+   * - 'dft': Discrete Fourier Transform (O(N²), works with any size)
+   * - 'rfft': Real FFT (O(N log N), for real-valued signals)
+   * - 'rdft': Real DFT (O(N²), for real-valued signals)
+   */
+  type?: "fft" | "dft" | "rfft" | "rdft";
+
+  /**
+   * Forward or inverse transform
+   * - true: Forward transform (time -> frequency)
+   * - false: Inverse transform (frequency -> time)
+   */
+  forward?: boolean;
+
+  /**
+   * Output format
+   * - 'complex': Return {real, imag} arrays
+   * - 'magnitude': Return magnitude spectrum
+   * - 'power': Return power spectrum (magnitude squared)
+   * - 'phase': Return phase spectrum
+   */
+  output?: "complex" | "magnitude" | "power" | "phase";
+}
+
+/**
+ * Parameters for STFT (Short-Time Fourier Transform) processing in pipeline
+ *
+ * STFT computes the Fourier transform over sliding windows, producing a time-frequency
+ * representation (spectrogram). Useful for analyzing non-stationary signals where
+ * frequency content changes over time.
+ *
+ * **Window Size vs Hop Size Trade-offs:**
+ * - Larger window: Better frequency resolution, worse time resolution
+ * - Smaller window: Better time resolution, worse frequency resolution
+ * - Larger hop: Faster processing, less overlap
+ * - Smaller hop: Smoother spectrogram, more overlap
+ *
+ * **Common Overlap Settings:**
+ * - 50% overlap: hopSize = windowSize / 2 (standard)
+ * - 75% overlap: hopSize = windowSize / 4 (high quality)
+ * - No overlap: hopSize = windowSize (fast, blocky)
+ */
+export interface stftParams {
+  /**
+   * Window size (FFT size) in samples
+   * - For FFT/RFFT: Must be power of 2 (e.g., 256, 512, 1024, 2048)
+   * - For DFT/RDFT: Can be any positive integer
+   *
+   * Typical values:
+   * - Audio analysis: 1024-4096 samples
+   * - Speech: 256-512 samples
+   * - Vibration: 512-2048 samples
+   */
+  windowSize: number;
+
+  /**
+   * Hop size (stride) in samples between consecutive windows
+   *
+   * Default: windowSize / 2 (50% overlap)
+   *
+   * Examples:
+   * - windowSize=1024, hopSize=512 → 50% overlap
+   * - windowSize=1024, hopSize=256 → 75% overlap
+   * - windowSize=1024, hopSize=1024 → No overlap
+   */
+  hopSize?: number;
+
+  /**
+   * Transform method
+   * - 'fft': Fast transform (O(N log N), requires power-of-2 windowSize)
+   * - 'dft': Direct transform (O(N²), works with any windowSize)
+   *
+   * Default: 'fft' if windowSize is power of 2, else 'dft'
+   */
+  method?: "fft" | "dft";
+
+  /**
+   * Input signal type
+   * - 'real': Real-valued input (uses RFFT/RDFT, outputs N/2+1 bins)
+   * - 'complex': Complex-valued input (uses FFT/DFT, outputs N bins)
+   *
+   * Default: 'real' (most common for audio/sensor data)
+   */
+  type?: "real" | "complex";
+
+  /**
+   * Transform direction
+   * - true: Forward STFT (time → time-frequency)
+   * - false: Inverse STFT (time-frequency → time)
+   *
+   * Default: true (forward)
+   */
+  forward?: boolean;
+
+  /**
+   * Output format for each time window
+   * - 'complex': Complex spectrum {real, imag}
+   * - 'magnitude': Magnitude spectrum |X[k]|
+   * - 'power': Power spectrum |X[k]|²
+   * - 'phase': Phase spectrum ∠X[k]
+   *
+   * Default: 'magnitude'
+   *
+   * Output shape: [numWindows, numFreqBins] flattened
+   */
+  output?: "complex" | "magnitude" | "power" | "phase";
+
+  /**
+   * Window function to reduce spectral leakage
+   * - 'none': Rectangular window (no tapering)
+   * - 'hann': Hann window (smooth, general purpose)
+   * - 'hamming': Hamming window (better frequency resolution)
+   * - 'blackman': Blackman window (best sidelobe suppression)
+   * - 'bartlett': Triangular window
+   *
+   * Default: 'hann'
+   */
+  window?: "none" | "hann" | "hamming" | "blackman" | "bartlett";
+}
+
+/**
+ * Parameters for Mel Spectrogram processing in pipeline
+ *
+ * Converts power spectrum to Mel-scale representation using filterbank matrix multiplication.
+ * The Mel scale is a perceptual scale of pitches judged by listeners to be equal in distance.
+ *
+ * **Pipeline Position:**
+ * Typically used after STFT + Power: STFT → Power → MelSpectrogram → Log → MFCC
+ *
+ * **Filterbank Creation:**
+ * The filterbank matrix must be pre-computed in TypeScript using a helper function
+ * that creates triangular filters distributed along the Mel scale.
+ *
+ * **What it does:**
+ * Applies matrix multiplication: mel_energies = filterbank × power_spectrum
+ * This groups frequency bins into perceptually-meaningful Mel bands.
+ */
+export interface MelSpectrogramParams {
+  /**
+   * Pre-computed Mel filterbank matrix (numMelBands × numBins)
+   *
+   * This matrix contains triangular filters that convert linear frequency bins
+   * to Mel-scale bands. Must be pre-computed using a Mel filterbank generator.
+   *
+   * Shape: Float32Array of length (numMelBands * numBins), row-major order
+   */
+  filterbankMatrix: Float32Array;
+
+  /**
+   * Number of input frequency bins (from STFT/FFT)
+   *
+   * For real signals: numBins = fftSize / 2 + 1
+   * For complex signals: numBins = fftSize
+   *
+   * Example: FFT size 512 → 257 bins (real)
+   */
+  numBins: number;
+
+  /**
+   * Number of output Mel frequency bands
+   *
+   * Common values:
+   * - Speech: 20-40 bands
+   * - Music: 40-128 bands
+   * - MFCC: 20-40 bands (13-20 MFCCs extracted from these)
+   *
+   * More bands = finer frequency resolution but higher computational cost
+   */
+  numMelBands: number;
+}
+
+/**
+ * Parameters for MFCC (Mel-Frequency Cepstral Coefficients) processing in pipeline
+ *
+ * Applies Discrete Cosine Transform (DCT) to log Mel energies to produce MFCCs.
+ * MFCCs are widely used in speech recognition, audio classification, and speaker
+ * identification because they:
+ * - Decorrelate Mel energies
+ * - Compress information into lower-order coefficients
+ * - Mimic human auditory perception
+ * - Provide compact representation suitable for ML models
+ *
+ * **Pipeline Position:**
+ * Final stage: STFT → Power → MelSpectrogram → Log → MFCC
+ *
+ * **Typical Output:**
+ * 13-20 MFCC coefficients per frame, representing the spectral envelope shape.
+ * Often the first coefficient (C0) represents energy and may be discarded.
+ */
+export interface MfccParams {
+  /**
+   * Number of input Mel frequency bands (from MelSpectrogram)
+   *
+   * Must match the numMelBands from the preceding MelSpectrogram stage.
+   *
+   * Typical values: 20-40 bands
+   */
+  numMelBands: number;
+
+  /**
+   * Number of MFCC coefficients to output
+   *
+   * Common values:
+   * - Speech recognition: 13 coefficients
+   * - Speaker recognition: 20 coefficients
+   * - Music: 13-20 coefficients
+   *
+   * Must be ≤ numMelBands. Lower coefficients capture envelope,
+   * higher coefficients capture fine spectral detail.
+   *
+   * Default: 13
+   */
+  numCoefficients?: number;
+
+  /**
+   * Apply logarithm to input energies before DCT
+   *
+   * - true: Apply log (standard for MFCCs, matches human perception)
+   * - false: Skip log (use when input is already in log domain)
+   *
+   * Default: true
+   *
+   * The log compression mimics human hearing's logarithmic loudness perception.
+   */
+  useLogEnergy?: boolean;
+
+  /**
+   * Cepstral liftering coefficient
+   *
+   * Liftering weights lower-order coefficients more than higher-order ones,
+   * improving recognition performance by emphasizing the spectral envelope.
+   *
+   * - 0: No liftering (disabled)
+   * - 22: Common value for speech (HTK standard)
+   * - Higher values: Stronger emphasis on lower coefficients
+   *
+   * Default: 0 (disabled)
+   *
+   * Lifter formula: L[n] = 1 + (Q/2) * sin(πn/Q)
+   * where Q is the liftering coefficient.
+   */
+  lifterCoefficient?: number;
+}

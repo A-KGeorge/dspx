@@ -18,6 +18,9 @@
 #include "adapters/RlsStage.h"               // RLS Adaptive Filter stage
 #include "adapters/WaveletTransformStage.h"  // Wavelet Transform stage
 #include "adapters/HilbertEnvelopeStage.h"   // Hilbert Envelope stage
+#include "adapters/StftStage.h"              // STFT (Short-Time Fourier Transform) stage
+#include "adapters/MelSpectrogramStage.h"    // Mel Spectrogram stage
+#include "adapters/MfccStage.h"              // MFCC (Mel-Frequency Cepstral Coefficients) stage
 #include "adapters/MatrixTransformStage.h"   // Matrix Transform stage (PCA/ICA/Whitening)
 #include "adapters/GscPreprocessorStage.h"   // GSC Preprocessor for adaptive beamforming
 #include "adapters/ChannelSelectorStage.h"   // Channel selector for reducing channel count
@@ -572,6 +575,108 @@ namespace dsp
             }
 
             return std::make_unique<dsp::adapters::HilbertEnvelopeStage>(windowSize, hopSize);
+        };
+
+        // Factory for STFT (Short-Time Fourier Transform) stage
+        m_stageFactories["stft"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("windowSize"))
+            {
+                throw std::invalid_argument("STFT: 'windowSize' is required");
+            }
+            size_t windowSize = params.Get("windowSize").As<Napi::Number>().Uint32Value();
+
+            // Get optional parameters with defaults
+            size_t hopSize = windowSize / 2; // Default: 50% overlap
+            if (params.Has("hopSize"))
+            {
+                hopSize = params.Get("hopSize").As<Napi::Number>().Uint32Value();
+            }
+
+            std::string method = "fft"; // Default: fft
+            if (params.Has("method"))
+            {
+                method = params.Get("method").As<Napi::String>().Utf8Value();
+            }
+
+            std::string type = "real"; // Default: real
+            if (params.Has("type"))
+            {
+                type = params.Get("type").As<Napi::String>().Utf8Value();
+            }
+
+            bool forward = true; // Default: forward transform
+            if (params.Has("forward"))
+            {
+                forward = params.Get("forward").As<Napi::Boolean>().Value();
+            }
+
+            std::string output = "magnitude"; // Default: magnitude
+            if (params.Has("output"))
+            {
+                output = params.Get("output").As<Napi::String>().Utf8Value();
+            }
+
+            std::string window = "hann"; // Default: hann window
+            if (params.Has("window"))
+            {
+                window = params.Get("window").As<Napi::String>().Utf8Value();
+            }
+
+            return std::make_unique<dsp::adapters::StftStage>(
+                windowSize, hopSize, method, type, forward, output, window);
+        };
+
+        // Factory for Mel Spectrogram stage
+        m_stageFactories["melSpectrogram"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("filterbankMatrix") || !params.Has("numBins") || !params.Has("numMelBands"))
+            {
+                throw std::invalid_argument("MelSpectrogram: requires 'filterbankMatrix', 'numBins', 'numMelBands'");
+            }
+
+            Napi::Float32Array filterbankArray = params.Get("filterbankMatrix").As<Napi::Float32Array>();
+            size_t numBins = params.Get("numBins").As<Napi::Number>().Uint32Value();
+            size_t numMelBands = params.Get("numMelBands").As<Napi::Number>().Uint32Value();
+
+            std::vector<float> filterbank(filterbankArray.Data(),
+                                          filterbankArray.Data() + filterbankArray.ElementLength());
+
+            return std::make_unique<dsp::adapters::MelSpectrogramStage>(
+                filterbank, numBins, numMelBands);
+        };
+
+        // Factory for MFCC stage
+        m_stageFactories["mfcc"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("numMelBands"))
+            {
+                throw std::invalid_argument("MFCC: 'numMelBands' is required");
+            }
+
+            size_t numMelBands = params.Get("numMelBands").As<Napi::Number>().Uint32Value();
+
+            // Optional parameters with defaults
+            size_t numCoefficients = 13; // Default: 13 MFCCs
+            if (params.Has("numCoefficients"))
+            {
+                numCoefficients = params.Get("numCoefficients").As<Napi::Number>().Uint32Value();
+            }
+
+            bool useLogEnergy = true; // Default: apply log
+            if (params.Has("useLogEnergy"))
+            {
+                useLogEnergy = params.Get("useLogEnergy").As<Napi::Boolean>().Value();
+            }
+
+            float lifterCoefficient = 0.0f; // Default: no liftering
+            if (params.Has("lifterCoefficient"))
+            {
+                lifterCoefficient = params.Get("lifterCoefficient").As<Napi::Number>().FloatValue();
+            }
+
+            return std::make_unique<dsp::adapters::MfccStage>(
+                numMelBands, numCoefficients, useLogEnergy, lifterCoefficient);
         };
 
         // Factory for PCA Transform stage

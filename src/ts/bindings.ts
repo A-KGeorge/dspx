@@ -37,6 +37,10 @@ import type {
   ClipDetectionParams,
   PeakDetectionParams,
   CspTransformParams,
+  fftParams,
+  stftParams,
+  MelSpectrogramParams,
+  MfccParams,
 } from "./types.js";
 import { CircularLogBuffer } from "./CircularLogBuffer.js";
 import { DriftDetector } from "./DriftDetector.js";
@@ -1983,6 +1987,510 @@ class DspProcessor {
     this.nativeInstance.addStage("hilbertEnvelope", params);
     const hopSize = params.hopSize || Math.floor(params.windowSize / 2);
     this.stages.push(`hilbertEnvelope:win${params.windowSize}:hop${hopSize}`);
+    return this;
+  }
+
+  /**
+   * Add FFT (Fast Fourier Transform) stage to the pipeline
+   *
+   * Transforms time-domain signal to frequency domain or vice versa.
+   * Supports both fast (radix-2) and direct (any size) transforms.
+   *
+   * **Transform Types:**
+   * - `fft`: Complex FFT (O(N log N), requires power-of-2 size)
+   * - `dft`: Complex DFT (O(N²), works with any size)
+   * - `rfft`: Real FFT for real signals (O(N log N), outputs N/2+1 bins)
+   * - `rdft`: Real DFT for real signals (O(N²), outputs N/2+1 bins)
+   *
+   * **Output Formats:**
+   * - `complex`: Returns interleaved [real0, imag0, real1, imag1, ...]
+   * - `magnitude`: Returns |X[k]| = sqrt(real² + imag²)
+   * - `power`: Returns |X[k]|² = real² + imag²
+   * - `phase`: Returns ∠X[k] = atan2(imag, real)
+   *
+   * @param params - FFT configuration
+   * @param params.size - FFT size (power of 2 for FFT/RFFT, any size for DFT/RDFT)
+   * @param params.type - Transform type (default: 'rfft' for real signals)
+   * @param params.forward - Forward (time→freq) or inverse (freq→time) (default: true)
+   * @param params.output - Output format (default: 'magnitude')
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Spectral analysis with magnitude output
+   * pipeline.fft({
+   *   size: 1024,
+   *   type: 'rfft',
+   *   output: 'magnitude'
+   * });
+   *
+   * @example
+   * // Power spectrum for energy analysis
+   * pipeline.fft({
+   *   size: 2048,
+   *   output: 'power'
+   * });
+   *
+   * @example
+   * // Complex FFT for phase information
+   * pipeline.fft({
+   *   size: 512,
+   *   type: 'fft',
+   *   output: 'complex'
+   * });
+   *
+   * @example
+   * // DFT for non-power-of-2 sizes
+   * pipeline.fft({
+   *   size: 1000,  // Not a power of 2
+   *   type: 'rdft',
+   *   output: 'magnitude'
+   * });
+   */
+  fft(params: fftParams): this {
+    if (!params.size || params.size <= 0 || !Number.isInteger(params.size)) {
+      throw new TypeError(
+        `Fft: size must be a positive integer, got ${params.size}`
+      );
+    }
+
+    const type = params.type || "rfft";
+    const forward = params.forward ?? true;
+    const output = params.output || "magnitude";
+
+    // Validate type
+    const validTypes = ["fft", "dft", "rfft", "rdft"];
+    if (!validTypes.includes(type)) {
+      throw new TypeError(
+        `Fft: type must be one of ${validTypes.join(", ")}, got '${type}'`
+      );
+    }
+
+    // Validate output format
+    const validOutputs = ["complex", "magnitude", "power", "phase"];
+    if (!validOutputs.includes(output)) {
+      throw new TypeError(
+        `Fft: output must be one of ${validOutputs.join(", ")}, got '${output}'`
+      );
+    }
+
+    // Check power-of-2 requirement for FFT/RFFT
+    if (
+      (type === "fft" || type === "rfft") &&
+      !this.isPowerOfTwo(params.size)
+    ) {
+      throw new TypeError(
+        `Fft: ${type} requires power-of-2 size. Got ${params.size}. Use 'dft' or 'rdft' for arbitrary sizes.`
+      );
+    }
+
+    this.nativeInstance.addStage("fft", {
+      size: params.size,
+      type,
+      forward,
+      output,
+    });
+
+    const direction = forward ? "forward" : "inverse";
+    this.stages.push(`fft:${type}:${params.size}:${direction}:${output}`);
+    return this;
+  }
+
+  /**
+   * Helper to check if a number is a power of 2
+   */
+  private isPowerOfTwo(n: number): boolean {
+    return n > 0 && (n & (n - 1)) === 0;
+  }
+
+  /**
+   * Add STFT (Short-Time Fourier Transform) stage to the pipeline
+   *
+   * Computes time-frequency representation by applying FFT/DFT to overlapping windows.
+   * Produces a spectrogram showing how frequency content evolves over time.
+   *
+   * **Use Cases:**
+   * - Audio spectrograms for music/speech analysis
+   * - Non-stationary signal analysis (EEG, vibration)
+   * - Feature extraction for machine learning
+   * - Time-varying frequency detection
+   *
+   * **Time-Frequency Resolution Trade-off:**
+   * - Larger window → Better frequency resolution, worse time resolution
+   * - Smaller window → Better time resolution, worse frequency resolution
+   *
+   * **Output Format:**
+   * The output is a flattened 2D array: [window0_bin0, window0_bin1, ..., window1_bin0, ...]
+   * - Rows: Time windows (numWindows)
+   * - Cols: Frequency bins (windowSize/2+1 for real, windowSize for complex)
+   *
+   * @param params - STFT configuration
+   * @param params.windowSize - FFT window size (power of 2 for FFT, any size for DFT)
+   * @param params.hopSize - Stride between windows (default: windowSize/2, i.e., 50% overlap)
+   * @param params.method - 'fft' or 'dft' (default: auto-detect based on windowSize)
+   * @param params.type - 'real' or 'complex' input (default: 'real')
+   * @param params.forward - true for forward STFT, false for inverse (default: true)
+   * @param params.output - 'complex', 'magnitude', 'power', or 'phase' (default: 'magnitude')
+   * @param params.window - Window function: 'none', 'hann', 'hamming', 'blackman', 'bartlett' (default: 'hann')
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Audio spectrogram with default settings
+   * pipeline.stft({
+   *   windowSize: 1024,
+   *   hopSize: 512,      // 50% overlap
+   *   output: 'magnitude'
+   * });
+   *
+   * @example
+   * // High time resolution for transient detection
+   * pipeline.stft({
+   *   windowSize: 256,   // Small window
+   *   hopSize: 64,       // 75% overlap
+   *   window: 'hann'
+   * });
+   *
+   * @example
+   * // High frequency resolution for harmonic analysis
+   * pipeline.stft({
+   *   windowSize: 4096,  // Large window
+   *   hopSize: 2048,
+   *   output: 'power',
+   *   window: 'blackman'
+   * });
+   *
+   * @example
+   * // Complex output for phase vocoding
+   * pipeline.stft({
+   *   windowSize: 2048,
+   *   hopSize: 512,
+   *   output: 'complex'
+   * });
+   *
+   * @example
+   * // Non-power-of-2 with DFT
+   * pipeline.stft({
+   *   windowSize: 1000,
+   *   method: 'dft',
+   *   output: 'magnitude'
+   * });
+   */
+  stft(params: stftParams): this {
+    // Validate windowSize
+    if (
+      !params.windowSize ||
+      params.windowSize <= 0 ||
+      !Number.isInteger(params.windowSize)
+    ) {
+      throw new TypeError(
+        `Stft: windowSize must be a positive integer, got ${params.windowSize}`
+      );
+    }
+
+    // Validate hopSize if provided
+    const hopSize = params.hopSize ?? Math.floor(params.windowSize / 2);
+    if (
+      hopSize <= 0 ||
+      hopSize > params.windowSize ||
+      !Number.isInteger(hopSize)
+    ) {
+      throw new TypeError(
+        `Stft: hopSize must be a positive integer <= windowSize (${params.windowSize}), got ${hopSize}`
+      );
+    }
+
+    // Auto-detect method based on windowSize if not specified
+    const isPow2 = this.isPowerOfTwo(params.windowSize);
+    const method = params.method ?? (isPow2 ? "fft" : "dft");
+    const type = params.type ?? "real";
+    const forward = params.forward ?? true;
+    const output = params.output ?? "magnitude";
+    const windowFunc = params.window ?? "hann";
+
+    // Validate method
+    const validMethods = ["fft", "dft"];
+    if (!validMethods.includes(method)) {
+      throw new TypeError(
+        `Stft: method must be one of ${validMethods.join(
+          ", "
+        )}, got '${method}'`
+      );
+    }
+
+    // Validate type
+    const validTypes = ["real", "complex"];
+    if (!validTypes.includes(type)) {
+      throw new TypeError(
+        `Stft: type must be one of ${validTypes.join(", ")}, got '${type}'`
+      );
+    }
+
+    // Validate output
+    const validOutputs = ["complex", "magnitude", "power", "phase"];
+    if (!validOutputs.includes(output)) {
+      throw new TypeError(
+        `Stft: output must be one of ${validOutputs.join(
+          ", "
+        )}, got '${output}'`
+      );
+    }
+
+    // Validate window function
+    const validWindows = ["none", "hann", "hamming", "blackman", "bartlett"];
+    if (!validWindows.includes(windowFunc)) {
+      throw new TypeError(
+        `Stft: window must be one of ${validWindows.join(
+          ", "
+        )}, got '${windowFunc}'`
+      );
+    }
+
+    // Check power-of-2 requirement for FFT
+    if (method === "fft" && !isPow2) {
+      throw new TypeError(
+        `Stft: FFT method requires power-of-2 windowSize. Got ${params.windowSize}. Use method: 'dft' for arbitrary sizes.`
+      );
+    }
+
+    this.nativeInstance.addStage("stft", {
+      windowSize: params.windowSize,
+      hopSize,
+      method,
+      type,
+      forward,
+      output,
+      window: windowFunc,
+    });
+
+    const direction = forward ? "forward" : "inverse";
+    const overlapPct = Math.round(
+      ((params.windowSize - hopSize) / params.windowSize) * 100
+    );
+    this.stages.push(
+      `stft:${method}:win${params.windowSize}:hop${hopSize}(${overlapPct}%):${windowFunc}:${direction}:${output}`
+    );
+    return this;
+  }
+
+  /**
+   * Apply Mel Spectrogram conversion to power spectrum
+   *
+   * Converts linear frequency spectrum to Mel-scale representation using a pre-computed
+   * filterbank matrix. The Mel scale is perceptually motivated and better matches human
+   * hearing's frequency resolution.
+   *
+   * **Typical Pipeline:**
+   * ```
+   * STFT → Power → MelSpectrogram → Log → MFCC
+   * ```
+   *
+   * **What it does:**
+   * - Matrix multiplication: mel_energies = filterbank × power_spectrum
+   * - Groups frequency bins into perceptually-meaningful Mel bands
+   * - High-performance C++ implementation using Eigen
+   *
+   * @param params - Mel spectrogram configuration (filterbank, numBins, numMelBands)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Create Mel filterbank (helper function needed)
+   * const filterbank = createMelFilterbank({
+   *   sampleRate: 16000,
+   *   numBins: 257, // from FFT size 512
+   *   numMelBands: 40,
+   *   fMin: 0,
+   *   fMax: 8000
+   * });
+   *
+   * pipeline
+   *   .stft({ windowSize: 512, output: 'power' })
+   *   .melSpectrogram({
+   *     filterbankMatrix: filterbank,
+   *     numBins: 257,
+   *     numMelBands: 40
+   *   });
+   *
+   * @example
+   * // Speech recognition pipeline
+   * const filterbank = createMelFilterbank({
+   *   sampleRate: 16000,
+   *   numBins: 513,
+   *   numMelBands: 26,
+   *   fMin: 20,
+   *   fMax: 8000
+   * });
+   *
+   * pipeline
+   *   .stft({ windowSize: 1024, output: 'power' })
+   *   .melSpectrogram({
+   *     filterbankMatrix: filterbank,
+   *     numBins: 513,
+   *     numMelBands: 26
+   *   })
+   *   .mfcc({ numMelBands: 26, numCoefficients: 13 });
+   */
+  melSpectrogram(params: MelSpectrogramParams): this {
+    // Validate required parameters
+    if (
+      !params.filterbankMatrix ||
+      !(params.filterbankMatrix instanceof Float32Array)
+    ) {
+      throw new TypeError(
+        "melSpectrogram: filterbankMatrix must be a Float32Array"
+      );
+    }
+
+    if (!Number.isInteger(params.numBins) || params.numBins <= 0) {
+      throw new TypeError("melSpectrogram: numBins must be a positive integer");
+    }
+
+    if (!Number.isInteger(params.numMelBands) || params.numMelBands <= 0) {
+      throw new TypeError(
+        "melSpectrogram: numMelBands must be a positive integer"
+      );
+    }
+
+    // Validate filterbank dimensions
+    const expectedSize = params.numMelBands * params.numBins;
+    if (params.filterbankMatrix.length !== expectedSize) {
+      throw new RangeError(
+        `melSpectrogram: filterbankMatrix length (${params.filterbankMatrix.length}) must equal numMelBands × numBins (${expectedSize})`
+      );
+    }
+
+    this.nativeInstance.addStage("melSpectrogram", {
+      filterbankMatrix: params.filterbankMatrix,
+      numBins: params.numBins,
+      numMelBands: params.numMelBands,
+    });
+
+    this.stages.push(
+      `melSpectrogram:${params.numBins}bins→${params.numMelBands}mels`
+    );
+    return this;
+  }
+
+  /**
+   * Extract MFCC (Mel-Frequency Cepstral Coefficients) features
+   *
+   * Applies Discrete Cosine Transform (DCT) to log Mel energies to produce MFCCs.
+   * MFCCs are the standard features for speech recognition, speaker identification,
+   * and audio classification because they:
+   * - Decorrelate Mel energies
+   * - Compress information into lower-order coefficients
+   * - Mimic human auditory perception
+   * - Provide compact representation for ML models
+   *
+   * **Typical Pipeline:**
+   * ```
+   * STFT → Power → MelSpectrogram → Log → MFCC
+   * ```
+   *
+   * **What it does:**
+   * - Applies DCT-II to (log) Mel energies
+   * - Keeps first N coefficients (typically 13-20)
+   * - Optional cepstral liftering for improved recognition
+   * - High-performance C++ implementation with pre-computed cosine tables
+   *
+   * @param params - MFCC configuration (numMelBands, numCoefficients, options)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Standard speech recognition pipeline
+   * const filterbank = createMelFilterbank({
+   *   sampleRate: 16000,
+   *   numBins: 257,
+   *   numMelBands: 26
+   * });
+   *
+   * pipeline
+   *   .stft({ windowSize: 512, output: 'power' })
+   *   .melSpectrogram({
+   *     filterbankMatrix: filterbank,
+   *     numBins: 257,
+   *     numMelBands: 26
+   *   })
+   *   .mfcc({
+   *     numMelBands: 26,
+   *     numCoefficients: 13,
+   *     useLogEnergy: true,
+   *     lifterCoefficient: 22
+   *   });
+   *
+   * @example
+   * // Music classification with more coefficients
+   * pipeline
+   *   .stft({ windowSize: 2048, output: 'power' })
+   *   .melSpectrogram({
+   *     filterbankMatrix: musicFilterbank,
+   *     numBins: 1025,
+   *     numMelBands: 40
+   *   })
+   *   .mfcc({
+   *     numMelBands: 40,
+   *     numCoefficients: 20
+   *   });
+   *
+   * @example
+   * // Skip log if input is already in log domain
+   * pipeline
+   *   .stft({ windowSize: 512, output: 'power' })
+   *   .melSpectrogram({ filterbankMatrix, numBins: 257, numMelBands: 26 })
+   *   .tap((samples) => {
+   *     // Apply log manually
+   *     for (let i = 0; i < samples.length; i++) {
+   *       samples[i] = Math.log(samples[i] + 1e-10);
+   *     }
+   *   })
+   *   .mfcc({
+   *     numMelBands: 26,
+   *     numCoefficients: 13,
+   *     useLogEnergy: false  // Skip log since we already applied it
+   *   });
+   */
+  mfcc(params: MfccParams): this {
+    // Validate required parameters
+    if (!Number.isInteger(params.numMelBands) || params.numMelBands <= 0) {
+      throw new TypeError("mfcc: numMelBands must be a positive integer");
+    }
+
+    // Apply defaults
+    const numCoefficients = params.numCoefficients ?? 13;
+    const useLogEnergy = params.useLogEnergy ?? true;
+    const lifterCoefficient = params.lifterCoefficient ?? 0;
+
+    // Validate optional parameters
+    if (!Number.isInteger(numCoefficients) || numCoefficients <= 0) {
+      throw new TypeError("mfcc: numCoefficients must be a positive integer");
+    }
+
+    if (numCoefficients > params.numMelBands) {
+      throw new RangeError(
+        `mfcc: numCoefficients (${numCoefficients}) must be ≤ numMelBands (${params.numMelBands})`
+      );
+    }
+
+    if (typeof useLogEnergy !== "boolean") {
+      throw new TypeError("mfcc: useLogEnergy must be a boolean");
+    }
+
+    if (typeof lifterCoefficient !== "number" || lifterCoefficient < 0) {
+      throw new TypeError(
+        "mfcc: lifterCoefficient must be a non-negative number"
+      );
+    }
+
+    this.nativeInstance.addStage("mfcc", {
+      numMelBands: params.numMelBands,
+      numCoefficients,
+      useLogEnergy,
+      lifterCoefficient,
+    });
+
+    const lifterStr = lifterCoefficient > 0 ? `:lift${lifterCoefficient}` : "";
+    const logStr = useLogEnergy ? ":log" : "";
+    this.stages.push(
+      `mfcc:${params.numMelBands}mels→${numCoefficients}coeffs${logStr}${lifterStr}`
+    );
     return this;
   }
 
