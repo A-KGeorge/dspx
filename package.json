@@ -13,8 +13,10 @@
     "README.md"
   ],
   "scripts": {
+    "install": "node scripts/install.js",
     "test": "node scripts/test.js",
     "test:clean": "node -e \"require('fs').rmSync('node_modules/.cache', {recursive: true, force: true})\" && npm test",
+    "test:install": "node scripts/test-install.js",
     "build:ts": "tsc",
     "build:native": "node-gyp rebuild",
     "build": "npm run build:native && npm run build:ts",

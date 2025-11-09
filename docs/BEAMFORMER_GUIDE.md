@@ -75,7 +75,13 @@ const bf = calculateBeamformerWeights(
 // 2. Build adaptive beamforming pipeline
 const pipeline = createDspPipeline();
 pipeline
-  .HighpassFilter({ cutoff: 80 }) // Remove DC and low-frequency noise
+  .filter({
+    type: "butterworth",
+    mode: "highpass",
+    cutoffFrequency: 80,
+    sampleRate: 16000,
+    order: 2,
+  }) // Remove DC and low-frequency noise
   .GscPreprocessor({
     numChannels: 8,
     steeringWeights: bf.steeringWeights,
@@ -169,7 +175,13 @@ pipeline.GscPreprocessor(params: {
 const bf = calculateBeamformerWeights(8, "linear", 0.0);
 
 pipeline
-  .HighpassFilter({ cutoff: 100 }) // Remove sub-vocal rumble
+  .filter({
+    type: "butterworth",
+    mode: "highpass",
+    cutoffFrequency: 100,
+    sampleRate: 16000,
+    order: 2,
+  }) // Remove sub-vocal rumble
   .GscPreprocessor({
     numChannels: 8,
     steeringWeights: bf.steeringWeights,
@@ -180,7 +192,13 @@ pipeline
     learningRate: 0.005,
     normalized: true,
   })
-  .LowpassFilter({ cutoff: 3400 }); // Telephone bandwidth
+  .filter({
+    type: "butterworth",
+    mode: "lowpass",
+    cutoffFrequency: 3400,
+    sampleRate: 16000,
+    order: 2,
+  }); // Telephone bandwidth
 ```
 
 **Why LMS?** Conference calls have relatively stable noise (fan noise, keyboard). LMS converges slowly but uses minimal CPU.
@@ -220,7 +238,14 @@ pipeline
 const bf = calculateBeamformerWeights(6, "planar", 30.0);
 
 pipeline
-  .BandpassFilter({ lowCutoff: 500, highCutoff: 8000 }) // Animal vocalizations
+  .filter({
+    type: "butterworth",
+    mode: "bandpass",
+    lowFrequency: 500,
+    highFrequency: 8000,
+    sampleRate: 16000,
+    order: 4,
+  }) // Animal vocalizations
   .GscPreprocessor({
     numChannels: 6,
     steeringWeights: bf.steeringWeights,
@@ -243,7 +268,13 @@ pipeline
 const bf = calculateBeamformerWeights(2, "linear", 0.0);
 
 pipeline
-  .HighpassFilter({ cutoff: 200 }) // Remove engine rumble
+  .filter({
+    type: "butterworth",
+    mode: "highpass",
+    cutoffFrequency: 200,
+    sampleRate: 16000,
+    order: 2,
+  }) // Remove engine rumble
   .GscPreprocessor({
     numChannels: 2,
     steeringWeights: bf.steeringWeights,
@@ -254,7 +285,14 @@ pipeline
     lambda: 0.98, // Very fast adaptation (road noise changes quickly)
     delta: 0.5,
   })
-  .BandpassFilter({ lowCutoff: 300, highCutoff: 3400 }); // Voice band
+  .filter({
+    type: "butterworth",
+    mode: "bandpass",
+    lowFrequency: 300,
+    highFrequency: 3400,
+    sampleRate: 16000,
+    order: 4,
+  }); // Voice band
 ```
 
 ---

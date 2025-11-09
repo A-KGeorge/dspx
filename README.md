@@ -342,7 +342,7 @@ const output = await pipeline.process(input, {
 | Batched callbacks                | 3.2M samples/sec | ✅ **Recommended** for production |
 | Individual callbacks             | 6.1M samples/sec | ⚠️ Development/debugging only     |
 
-**SIMD Acceleration:** Batch operations and rectification are 2-8x faster with AVX2/SSE2/NEON on x86_64. See [SIMD_OPTIMIZATIONS.md](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/SIMD_OPTIMIZATIONS.md) for details.
+**SIMD Acceleration:** Batch operations and rectification are 2-8x faster with AVX2/SSE2/NEON on x86_64. See [SIMD_OPTIMIZATIONS.md](https://github.com/A-KGeorge/dspx/blob/main/docs/SIMD_OPTIMIZATIONS.md) for details.
 
 **Recommendation:** Use batched callbacks in production. Individual callbacks benchmark faster but block the Node.js event loop and can't integrate with real telemetry systems (Kafka, Datadog, Loki).
 
@@ -362,21 +362,61 @@ const output = await pipeline.process(input, {
 
 **We welcome contributions!** If you have ARM optimization expertise or access to ARM development hardware, please open an issue or PR. Mobile DSP is challenging and community input helps improve real-world performance.
 
-📖 **Read more:** [ARM Platform Status & Performance Notes](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/ARM_PLATFORM_STATUS.md)
+📖 **Read more:** [ARM Platform Status & Performance Notes](https://github.com/A-KGeorge/dspx/blob/main/docs/ARM_PLATFORM_STATUS.md)
 
 ---
 
 ## 📦 Installation
 
 ```bash
-npm install dspx redis
+npm install dspx
 ```
 
-**Note:** You'll need a C++ compiler if prebuilt binaries aren't available for your platform:
+### Smart Installation
 
-- Windows: Visual Studio 2022 or Build Tools
-- macOS: Xcode Command Line Tools
-- Linux: GCC/G++ 7+
+dspx uses an intelligent installation strategy for optimal performance and ease of use:
+
+- **x64/x86 Architectures** (Intel/AMD): Uses prebuilt binaries
+
+  - ✅ No C++ compiler needed
+  - ⚡ Fast installation (~5 seconds)
+  - 🎯 Works out of the box
+
+- **ARM Architectures** (Apple Silicon, Raspberry Pi, AWS Graviton): Compiles locally
+  - 🔧 Requires C++ build tools (see below)
+  - 🚀 Optimized for your specific ARM CPU
+  - 💪 Better performance than generic prebuilds
+
+### Build Tools (ARM only)
+
+If you're on ARM architecture, install build tools first:
+
+**macOS (Apple Silicon M1/M2/M3):**
+
+```bash
+xcode-select --install
+```
+
+**Linux (Raspberry Pi, AWS Graviton):**
+
+```bash
+sudo apt-get update
+sudo apt-get install build-essential
+```
+
+**Windows (ARM64):**
+
+```bash
+npm install --global windows-build-tools
+```
+
+### Supported Platforms
+
+- ✅ Node.js 18, 20, 22 (LTS versions)
+- ✅ Windows x64, Linux x64, macOS x64
+- ✅ macOS arm64 (Apple Silicon)
+- ✅ Linux arm64 (AWS Graviton, Raspberry Pi 4+)
+- ✅ Linux armv7 (Raspberry Pi 3)
 
 ---
 
@@ -453,7 +493,7 @@ const smoothed = await pipeline.process(samples, timestamps, { channels: 1 });
 console.log(smoothed); // Time-aware smoothing
 ```
 
-**📚 [Complete Time-Series Guide →](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/time-series-guide.md)**
+**📚 [Complete Time-Series Guide →](https://github.com/A-KGeorge/dspx/blob/main/docs/time-series-guide.md)**
 
 ### Processing Without Modifying Input
 
@@ -538,7 +578,7 @@ const consumer = await createKafkaConsumer({
 await consumer.run();
 ```
 
-**See [Kafka Integration Guide](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/KAFKA_INTEGRATION.md) for real-time streaming examples.**
+**See [Kafka Integration Guide](https://github.com/A-KGeorge/dspx/blob/main/docs/KAFKA_INTEGRATION.md) for real-time streaming examples.**
 
 ### Multi-Channel Processing
 
@@ -600,7 +640,7 @@ await pipeline.process(samples: Float32Array, options: {
 });
 ```
 
-**See [Time-Series Guide](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/time-series-guide.md) for detailed examples.**
+**See [Time-Series Guide](https://github.com/A-KGeorge/dspx/blob/main/docs/time-series-guide.md) for detailed examples.**
 
 ### Available Filters
 
@@ -1568,7 +1608,7 @@ const activityLevel = await activityPipeline.process(multiChannelData, {
 - **Transform Domain**: STFT, Hilbert transform, wavelet transforms
 - **Feature Extraction**: Zero-crossing rate, peak detection, autocorrelation
 
-See the [project roadmap](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/ROADMAP.md) for more details.
+See the [project roadmap](https://github.com/A-KGeorge/dspx/blob/main/ROADMAP.md) for more details.
 
 ---
 
@@ -1602,7 +1642,7 @@ const pipeline = createDspPipeline()
   .Rms({ windowSize: 5 });
 ```
 
-**📚 [Full Advanced Features Documentation](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/advanced.md)**
+**📚 [Full Advanced Features Documentation](https://github.com/A-KGeorge/dspx/blob/main/docs/advanced.md)**
 
 Key highlights:
 
@@ -1756,7 +1796,7 @@ const smoothed = await pipeline.process(samples, timestamps, { channels: 1 });
 // Properly handles irregular sampling intervals!
 ```
 
-**📚 [More Time-Series Examples →](https://github.com/A-KGeorge/dsp_ts_redis/blob/main/docs/time-series-guide.md#real-world-examples)**
+**📚 [More Time-Series Examples →](https://github.com/A-KGeorge/dspx/blob/main/docs/time-series-guide.md#real-world-examples)**
 
 ### Streaming Data with Crash Recovery
 
@@ -1888,7 +1928,7 @@ await worker2.process(chunk2, { sampleRate: 2000, channels: 1 });
 ### Building from Source
 
 ```bash
-git clone https://github.com/A-KGeorge/dsp_ts_redis.git
+git clone https://github.com/A-KGeorge/dspx.git
 cd dspx
 npm install
 npm run build          # Compile C++ bindings with cmake-js
@@ -2258,7 +2298,7 @@ Contributions are welcome! This project is in active development.
 ### Development Workflow
 
 ```bash
-git clone https://github.com/A-KGeorge/dsp_ts_redis.git
+git clone https://github.com/A-KGeorge/dspx.git
 cd dspx
 npm install
 npm run build      # Compile C++ with cmake-js

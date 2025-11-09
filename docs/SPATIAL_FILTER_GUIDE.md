@@ -89,7 +89,14 @@ console.log("Converged:", csp.eigenvalues[0] > 2 * csp.eigenvalues[3]);
 // 3. Build real-time classification pipeline
 const pipeline = createDspPipeline();
 pipeline
-  .BandpassFilter({ lowCutoff: 8, highCutoff: 30 }) // Motor imagery band (mu/beta)
+  .filter({
+    type: "butterworth",
+    mode: "bandpass",
+    lowFrequency: 8,
+    highFrequency: 30,
+    sampleRate: 250,
+    order: 4,
+  }) // Motor imagery band (mu/beta)
   .CspTransform({
     cspMatrix: csp.cspMatrix,
     mean: csp.mean,
@@ -255,9 +262,28 @@ Right motor cortex: C4, CP4
 // Preprocessing
 const pipeline = createDspPipeline();
 pipeline
-  .HighpassFilter({ cutoff: 0.5 }) // Remove DC drift
-  .BandpassFilter({ lowCutoff: 8, highCutoff: 30 }) // Mu/beta band
-  .Notch({ frequency: 50, bandwidth: 2 }); // Remove powerline (50 Hz EU, 60 Hz US)
+  .filter({
+    type: "butterworth",
+    mode: "highpass",
+    cutoffFrequency: 0.5,
+    sampleRate: 250,
+    order: 2,
+  }) // Remove DC drift
+  .filter({
+    type: "butterworth",
+    mode: "bandpass",
+    lowFrequency: 8,
+    highFrequency: 30,
+    sampleRate: 250,
+    order: 4,
+  }) // Mu/beta band
+  .filter({
+    type: "biquad",
+    mode: "notch",
+    frequency: 50,
+    q: 30,
+    sampleRate: 250,
+  }); // Remove powerline (50 Hz EU, 60 Hz US)
 
 // Extract epochs (trials)
 const leftEpochs = [];
@@ -376,9 +402,28 @@ pipeline
 ```typescript
 // Recommended pipeline BEFORE CSP training
 pipeline
-  .HighpassFilter({ cutoff: 0.5 }) // Remove slow drifts
-  .BandpassFilter({ lowCutoff: 8, highCutoff: 30 }) // Task-relevant band
-  .Notch({ frequency: 50, bandwidth: 2 }) // Powerline noise
+  .filter({
+    type: "butterworth",
+    mode: "highpass",
+    cutoffFrequency: 0.5,
+    sampleRate: 250,
+    order: 2,
+  }) // Remove slow drifts
+  .filter({
+    type: "butterworth",
+    mode: "bandpass",
+    lowFrequency: 8,
+    highFrequency: 30,
+    sampleRate: 250,
+    order: 4,
+  }) // Task-relevant band
+  .filter({
+    type: "biquad",
+    mode: "notch",
+    frequency: 50,
+    q: 30,
+    sampleRate: 250,
+  }) // Powerline noise
   .IcaTransform({
     /* if artifacts present */
   });
@@ -453,7 +498,21 @@ const targetErps = new Float32Array(30 * 200 * 16);
 const nonTargetErps = new Float32Array(150 * 200 * 16);
 
 // Preprocess: 0.5-10 Hz for slow P300 wave
-pipeline.HighpassFilter({ cutoff: 0.5 }).LowpassFilter({ cutoff: 10 });
+pipeline
+  .filter({
+    type: "butterworth",
+    mode: "highpass",
+    cutoffFrequency: 0.5,
+    sampleRate: 250,
+    order: 2,
+  })
+  .filter({
+    type: "butterworth",
+    mode: "lowpass",
+    cutoffFrequency: 10,
+    sampleRate: 250,
+    order: 2,
+  });
 
 // Extract epochs time-locked to stimulus (0-600ms)
 for (const flash of flashes) {
@@ -475,8 +534,20 @@ const csp = calculateCommonSpatialPatterns(targetErps, nonTargetErps, 16, 6);
 // Real-time detection
 const classifierPipeline = createDspPipeline();
 classifierPipeline
-  .HighpassFilter({ cutoff: 0.5 })
-  .LowpassFilter({ cutoff: 10 })
+  .filter({
+    type: "butterworth",
+    mode: "highpass",
+    cutoffFrequency: 0.5,
+    sampleRate: 250,
+    order: 2,
+  })
+  .filter({
+    type: "butterworth",
+    mode: "lowpass",
+    cutoffFrequency: 10,
+    sampleRate: 250,
+    order: 2,
+  })
   .CspTransform({
     cspMatrix: csp.cspMatrix,
     mean: csp.mean,

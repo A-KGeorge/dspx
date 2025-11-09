@@ -73,7 +73,7 @@ if (mode === "moving" && (process.arch === "arm64" || process.arch === "arm")) {
     console.warn(
       "\n⚠️  ARM NEON convolution optimization is experimental for moving mode.\n" +
         "   Mobile devices may not show speedup vs. scalar due to thermal/power constraints.\n" +
-        "   See: https://github.com/A-KGeorge/dsp_ts_redis#arm-platform-notice\n"
+        "   See: https://github.com/A-KGeorge/dspx#arm-platform-notice\n"
     );
     (globalThis as any).__dspx_arm_convolution_warned = true;
   }

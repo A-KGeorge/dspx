@@ -1,0 +1,70 @@
+# Development files
+*.log
+npm-debug.log*
+*.tsbuildinfo
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test files
+coverage/
+.nyc_output/
+test/
+__tests__/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+
+# Build artifacts (source builds)
+build/Release/obj/
+build/Release/*.tlog
+build/Release/*.pdb
+build/Release/*.idb
+build/Release/*.exp
+build/Release/*.lib
+build/Release/*.map
+
+# Source TypeScript (compiled .js and .d.ts included)
+src/ts/
+
+# Documentation (except README)
+docs/
+*.md
+!README.md
+!LICENSE
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+appveyor.yml
+
+# Package manager
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build tools config (keep binding.gyp)
+.npmrc
+tsconfig.json
+jest.config.js
+.eslintrc.*
+.prettierrc.*
+
+# Examples (if not needed)
+examples/
+
+# Scripts (except install.js which is needed)
+scripts/test.js
+
+# Changesets
+.changeset/
