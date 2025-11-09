@@ -1,5 +1,11 @@
 # dspx
 
+## 1.1.0
+
+### Minor Changes
+
+- [`c6ec14a`](https://github.com/A-KGeorge/dspx/commit/c6ec14add600fbe3692736286f9d7d33eca602d0) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - added mfcc, melspectrogram, and stft (all chainable)
+
 ## 1.0.1
 
 ### Patch Changes
