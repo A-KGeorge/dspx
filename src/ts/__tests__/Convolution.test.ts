@@ -27,13 +27,18 @@ test("Convolution - Batch Mode with Small Kernel (Direct)", async () => {
   const input = new Float32Array([1, 3, 2, 5, 4]);
   const result = await pipeline.process(input, { channels: 1 });
 
-  // Batch mode computes convolution over entire input
-  assert(result.length === input.length, "Output size should match input");
-  // First difference: 3-1=2, 2-3=-1, 5-2=3, 4-5=-1
+  // Batch mode computes VALID convolution: output length = N - M + 1 = 5 - 2 + 1 = 4
   assert(
-    Math.abs(result[1] - 2) < 0.01,
-    "Difference computation should be correct"
+    result.length === 4,
+    "Batch mode should return valid convolution (N-M+1)"
   );
+  // Valid convolution with kernel [1, -1]:
+  // result[0] = 1*1 + (-1)*3 = 1 - 3 = -2
+  // result[1] = 1*3 + (-1)*2 = 3 - 2 = 1
+  // result[2] = 1*2 + (-1)*5 = 2 - 5 = -3
+  // result[3] = 1*5 + (-1)*4 = 5 - 4 = 1
+  assert(Math.abs(result[0] - -2) < 0.01, "First difference should be -2");
+  assert(Math.abs(result[1] - 1) < 0.01, "Second difference should be 1");
 });
 
 test("Convolution - Gaussian Smoothing Kernel", async () => {
@@ -88,12 +93,16 @@ test("Convolution - Large Kernel with FFT", async () => {
 
   const result = await pipeline.process(input, { channels: 1 });
 
-  // FFT convolution should produce smoothed result
-  assert(result.length === input.length, "Output size should match input");
+  // Batch mode: valid convolution output length = N - M + 1 = 512 - 128 + 1 = 385
+  const expectedLength = inputSize - kernelSize + 1;
+  assert(
+    result.length === expectedLength,
+    `Batch mode should return valid convolution (got ${result.length}, expected ${expectedLength})`
+  );
 
   // A boxcar average of a sine wave should produce much smaller amplitudes
   // Check that output amplitude is reduced (averaging 128 samples of a 50-sample period wave)
-  const testIdx = 256; // Well past the kernel length
+  const testIdx = 128; // Well past the kernel length (use valid index for smaller output)
   // The boxcar will average over ~2.5 periods, so amplitude should be much less than 1.0
   assert(
     Math.abs(result[testIdx]) < 0.5,
@@ -110,9 +119,10 @@ test("Convolution - Force FFT Method", async () => {
   const input = new Float32Array([1, 2, 3, 4, 5]);
   const result = await pipeline.process(input, { channels: 1 });
 
+  // Batch mode: valid convolution output length = N - M + 1 = 5 - 3 + 1 = 3
   assert(
-    result.length === input.length,
-    "FFT method should produce correct size"
+    result.length === 3,
+    `FFT batch mode should return valid convolution (got ${result.length}, expected 3)`
   );
 });
 
@@ -125,9 +135,10 @@ test("Convolution - Force Direct Method", async () => {
   const input = new Float32Array([1, 2, 3, 4, 5]);
   const result = await pipeline.process(input, { channels: 1 });
 
+  // Batch mode: valid convolution output length = N - M + 1 = 5 - 3 + 1 = 3
   assert(
-    result.length === input.length,
-    "Direct method should produce correct size"
+    result.length === 3,
+    `Direct batch mode should return valid convolution (got ${result.length}, expected 3)`
   );
 });
 
@@ -188,9 +199,10 @@ test("Convolution - Auto Method Selection", async () => {
   const input1 = new Float32Array([1, 2, 3, 4, 5]);
   const result1 = await pipeline.process(input1, { channels: 1 });
 
+  // Batch mode: valid convolution output length = N - M + 1 = 5 - 3 + 1 = 3
   assert(
-    result1.length === input1.length,
-    "Auto selection should work for small kernel"
+    result1.length === 3,
+    `Auto selection batch mode should return valid convolution (got ${result1.length}, expected 3)`
   );
 
   // Create new pipeline for large kernel
@@ -210,9 +222,10 @@ test("Convolution - Auto Method Selection", async () => {
 
   const result2 = await pipeline2.process(input2, { channels: 1 });
 
+  // Batch mode: valid convolution output length = N - M + 1 = 200 - 100 + 1 = 101
   assert(
-    result2.length === input2.length,
-    "Auto selection should work for large kernel"
+    result2.length === 101,
+    `Auto selection with large kernel should return valid convolution (got ${result2.length}, expected 101)`
   );
 });
 
@@ -240,14 +253,17 @@ test("Convolution - Custom Auto Threshold", async () => {
 
   const result = await pipeline.process(input, { channels: 1 });
 
-  assert(result.length === input.length, "Custom threshold should work");
+  // Batch mode: valid convolution output length = N - M + 1 = 100 - 50 + 1 = 51
+  assert(
+    result.length === 51,
+    `Custom threshold batch mode should return valid convolution (got ${result.length}, expected 51)`
+  );
 });
 
 test("Convolution - Edge Detector Kernel", async () => {
   const pipeline = createDspPipeline();
 
   // Simple edge detection kernel [-1, 0, 1]
-  // With causal convolution: y[n] = -1*x[n] + 0*x[n-1] + 1*x[n-2]
   const kernel = new Float32Array([-1, 0, 1]);
   pipeline.convolution({ kernel, mode: "batch" });
 
@@ -255,18 +271,20 @@ test("Convolution - Edge Detector Kernel", async () => {
   const input = new Float32Array([0, 0, 0, 1, 1, 1, 0, 0, 0]);
   const result = await pipeline.process(input, { channels: 1 });
 
-  // Should detect edges (delayed by kernel.length-1 samples due to causality)
+  // Batch mode: valid convolution output length = N - M + 1 = 9 - 3 + 1 = 7
   assert(
-    result.length === input.length,
-    "Edge detection should produce correct size"
+    result.length === 7,
+    `Edge detection batch mode should return valid convolution (got ${result.length}, expected 7)`
   );
-  // Rising edge at input[3], detected at output[5]:
-  // y[5] = -1*1 + 0*1 + 1*1 = 0 (transition)
-  // y[6] = -1*0 + 0*1 + 1*1 = 1 (positive, rising edge detected)
-  // Falling edge at input[6], detected at output[8]:
-  // y[8] = -1*0 + 0*0 + 1*0 = 0 (but previous samples show the fall)
-  assert(result[5] > -0.5, "Transition at index 5");
-  assert(result[6] > 0, "Should detect rising edge at index 6");
+
+  // Valid convolution with kernel [-1, 0, 1]:
+  // result[0] = -1*0 + 0*0 + 1*0 = 0
+  // result[1] = -1*0 + 0*0 + 1*1 = 1 (rising edge detected!)
+  // result[2] = -1*0 + 0*1 + 1*1 = 1
+  // result[3] = -1*1 + 0*1 + 1*1 = -1 (transition)
+  // result[4] = -1*1 + 0*1 + 1*0 = -1 (falling edge detected!)
+  assert(result[1] > 0.5, "Should detect rising edge at index 1");
+  assert(result[4] < -0.5, "Should detect falling edge at index 4");
 });
 
 test("Convolution - Stateful Moving Mode", async () => {
@@ -474,5 +492,11 @@ test("Convolution - Large Multi-Channel with FFT", async () => {
 
   const result = await pipeline.process(input, { channels: numChannels });
 
-  assert(result.length === input.length, "Multi-channel FFT should work");
+  // Batch mode: valid convolution output length per channel = N - M + 1 = 200 - 100 + 1 = 101
+  // Total output = 101 * 4 = 404
+  const expectedLength = (samplesPerChannel - kernelSize + 1) * numChannels;
+  assert(
+    result.length === expectedLength,
+    `Multi-channel FFT batch mode should work (got ${result.length}, expected ${expectedLength})`
+  );
 });
