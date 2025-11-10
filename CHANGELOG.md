@@ -1,5 +1,11 @@
 # dspx
 
+## 1.1.3
+
+### Patch Changes
+
+- [`e7a292b`](https://github.com/A-KGeorge/dspx/commit/e7a292b10d8be190a69fd9587d536159552ae72a) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - added fft native chaining.
+
 ## 1.1.1
 
 ### Patch Changes
