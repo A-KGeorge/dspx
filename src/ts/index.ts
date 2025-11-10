@@ -1,3 +1,31 @@
+// Global error handlers for unhandled promise rejections
+// This prevents the library from crashing Node.js processes with exit code 1
+if (typeof process !== "undefined" && process.on) {
+  // Only add handlers if they haven't been added yet (check for existing listeners)
+  const existingHandlers = process.listenerCount("unhandledRejection");
+  
+  if (existingHandlers === 0) {
+    process.on("unhandledRejection", (reason: any, promise: Promise<any>) => {
+      console.error("[dspx] Unhandled Promise Rejection:", reason);
+      if (reason instanceof Error) {
+        console.error("[dspx] Stack trace:", reason.stack);
+      }
+      // Don't crash the process - log and continue
+    });
+
+    // Handle uncaught exceptions gracefully
+    const existingExceptionHandlers = process.listenerCount("uncaughtException");
+    if (existingExceptionHandlers === 0) {
+      process.on("uncaughtException", (error: Error) => {
+        console.error("[dspx] Uncaught Exception:", error.message);
+        console.error("[dspx] Stack trace:", error.stack);
+        // Exit with error code since this is more serious
+        process.exit(1);
+      });
+    }
+  }
+}
+
 // Export the main API
 export { createDspPipeline, DspProcessor } from "./bindings.js";
 export {

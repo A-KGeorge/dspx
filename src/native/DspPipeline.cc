@@ -19,6 +19,7 @@
 #include "adapters/WaveletTransformStage.h"  // Wavelet Transform stage
 #include "adapters/HilbertEnvelopeStage.h"   // Hilbert Envelope stage
 #include "adapters/StftStage.h"              // STFT (Short-Time Fourier Transform) stage
+#include "adapters/FftStage.h"               // FFT (Fast Fourier Transform) stage
 #include "adapters/MelSpectrogramStage.h"    // Mel Spectrogram stage
 #include "adapters/MfccStage.h"              // MFCC (Mel-Frequency Cepstral Coefficients) stage
 #include "adapters/MatrixTransformStage.h"   // Matrix Transform stage (PCA/ICA/Whitening)
@@ -625,6 +626,43 @@ namespace dsp
 
             return std::make_unique<dsp::adapters::StftStage>(
                 windowSize, hopSize, method, type, forward, output, window);
+        };
+
+        // Factory for FFT (Fast Fourier Transform) stage
+        m_stageFactories["fft"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("size"))
+            {
+                throw std::invalid_argument("FFT: 'size' is required");
+            }
+            size_t size = params.Get("size").As<Napi::Number>().Uint32Value();
+
+            // Parse transform type (fft, dft, rfft, rdft, etc.)
+            std::string typeStr = "rfft"; // Default: real FFT
+            if (params.Has("type"))
+            {
+                typeStr = params.Get("type").As<Napi::String>().Utf8Value();
+            }
+            dsp::adapters::FftStage::TransformType type =
+                dsp::adapters::FftStage::parseTransformType(typeStr);
+
+            // Parse forward/inverse
+            bool forward = true; // Default: forward
+            if (params.Has("forward"))
+            {
+                forward = params.Get("forward").As<Napi::Boolean>().Value();
+            }
+
+            // Parse output format
+            std::string outputStr = "magnitude"; // Default: magnitude
+            if (params.Has("output"))
+            {
+                outputStr = params.Get("output").As<Napi::String>().Utf8Value();
+            }
+            dsp::adapters::FftStage::OutputFormat output =
+                dsp::adapters::FftStage::parseOutputFormat(outputStr);
+
+            return std::make_unique<dsp::adapters::FftStage>(size, type, forward, output);
         };
 
         // Factory for Mel Spectrogram stage
