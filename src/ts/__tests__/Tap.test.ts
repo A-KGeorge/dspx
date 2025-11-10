@@ -79,6 +79,7 @@ describe("Tap Method", () => {
     const pipeline = createDspPipeline()
       .MovingAverage({ mode: "moving", windowSize: 2 })
       .tap(() => {
+        // eslint-disable-next-line @typescript-eslint/no-throw-literal
         throw new Error("Tap error!");
       });
 
