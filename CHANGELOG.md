@@ -1,5 +1,11 @@
 # dspx
 
+## 1.1.4
+
+### Patch Changes
+
+- [`024f861`](https://github.com/A-KGeorge/dspx/commit/024f861d7992e90ec3cf710bc98e2239aa84f573) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - fixed fft
+
 ## 1.1.3
 
 ### Patch Changes
