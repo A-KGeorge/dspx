@@ -75,22 +75,47 @@ describe("Tap Method", () => {
 
   it("should handle errors in tap callback gracefully", async () => {
     let processCompleted = false;
+    let errorLogged = false;
 
-    const pipeline = createDspPipeline()
-      .MovingAverage({ mode: "moving", windowSize: 2 })
-      .tap(() => {
-        // eslint-disable-next-line @typescript-eslint/no-throw-literal
-        throw new Error("Tap error!");
-      });
+    // Temporarily capture console.error to verify error is logged
+    const originalConsoleError = console.error;
+    console.error = (...args: any[]) => {
+      if (args[0]?.includes?.("Tap callback error")) {
+        errorLogged = true;
+      }
+      // Still log to original console for debugging
+      originalConsoleError.apply(console, args);
+    };
 
-    const input = new Float32Array([1, 2, 3, 4, 5]);
+    try {
+      const pipeline = createDspPipeline()
+        .MovingAverage({ mode: "moving", windowSize: 2 })
+        .tap(() => {
+          // eslint-disable-next-line @typescript-eslint/no-throw-literal
+          throw new Error("Tap error!");
+        });
 
-    // Should not throw, error is caught and logged
-    const result = await pipeline.process(input, { sampleRate: 1000 });
-    processCompleted = true;
+      const input = new Float32Array([1, 2, 3, 4, 5]);
 
-    assert.strictEqual(processCompleted, true);
-    assert.notStrictEqual(result, null);
+      // Should not throw, error is caught and logged
+      const result = await pipeline.process(input, { sampleRate: 1000 });
+      processCompleted = true;
+
+      assert.strictEqual(
+        processCompleted,
+        true,
+        "Process should complete despite tap error"
+      );
+      assert.notStrictEqual(result, null, "Result should not be null");
+      assert.strictEqual(
+        errorLogged,
+        true,
+        "Error should be logged to console"
+      );
+    } finally {
+      // Restore original console.error
+      console.error = originalConsoleError;
+    }
   });
 
   it("should work with empty pipeline (no stages)", async () => {
