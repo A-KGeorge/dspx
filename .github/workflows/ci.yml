@@ -53,7 +53,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/Release
-          key: ${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('binding.gyp', 'package-lock.json') }}
+          key: ${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('binding.gyp', 'src/native/**/*.cc', 'src/native/**/*.h', 'package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.node-version }}-
 
@@ -80,20 +80,6 @@ jobs:
         run: npm test
         env:
           REDIS_URL: redis://localhost:6379
-
-      - name: Generate coverage report
-        if: matrix.node-version == '20.x'
-        run: npm run test:coverage || echo "⚠️ Coverage not configured"
-        continue-on-error: true
-
-      - name: Upload coverage to Codecov
-        if: matrix.node-version == '20.x'
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage/lcov.info
-          fail_ci_if_error: false
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   # 🧪 macOS + Windows tests
   test-other:
@@ -127,7 +113,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build/Release
-          key: ${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('binding.gyp', 'package-lock.json') }}
+          key: ${{ runner.os }}-${{ matrix.node-version }}-${{ hashFiles('binding.gyp', 'src/native/**/*.cc', 'src/native/**/*.h', 'package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-${{ matrix.node-version }}-
 
@@ -189,13 +175,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Cache prebuilds
-        uses: actions/cache@v4
-        with:
-          path: prebuilds
-          key: prebuild-${{ runner.os }}-${{ hashFiles('binding.gyp') }}
-          restore-keys: prebuild-${{ runner.os }}-
-
       - name: Build prebuild binaries
         run: npm run prebuildify
 
@@ -229,6 +208,33 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build:ts
+
+      # Download all prebuilds from the prebuild job
+      - name: Download prebuilds (Linux)
+        uses: actions/download-artifact@v4
+        with:
+          name: prebuilds-ubuntu-latest
+          path: prebuilds/
+
+      - name: Download prebuilds (macOS)
+        uses: actions/download-artifact@v4
+        with:
+          name: prebuilds-macos-latest
+          path: prebuilds/
+
+      - name: Download prebuilds (Windows)
+        uses: actions/download-artifact@v4
+        with:
+          name: prebuilds-windows-latest
+          path: prebuilds/
+
+      - name: Verify prebuilds
+        run: |
+          echo "📦 Prebuilds included in npm package:"
+          ls -lR prebuilds/ || echo "⚠️ No prebuilds found"
 
       - name: Build package
         run: npm run build
