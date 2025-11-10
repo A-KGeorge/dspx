@@ -40,8 +40,9 @@ namespace dsp
                 explicit FftpackContext(size_t n);
 
                 // Forward/inverse real FFT
-                void rfft(const T *input, std::complex<T> *output);
-                void irfft(const std::complex<T> *input, T *output);
+                // Note: input/output buffers must not overlap (restrict semantics)
+                void rfft(const T *__restrict input, std::complex<T> *__restrict output);
+                void irfft(const std::complex<T> *__restrict input, T *__restrict output);
 
                 size_t size() const { return m_n; }
                 size_t halfSize() const { return (m_n / 2) + 1; }

@@ -1996,46 +1996,53 @@ class DspProcessor {
    * Transforms time-domain signal to frequency domain or vice versa.
    * Supports both fast (radix-2) and direct (any size) transforms.
    *
+   * **Two Processing Modes:**
+   * 1. **Batch mode** (default): Stateless FFT over entire input buffer
+   * 2. **Moving mode**: Stateful sliding-window FFT (STFT) with overlap
+   *
    * **Transform Types:**
-   * - `fft`: Complex FFT (O(N log N), requires power-of-2 size)
+   * - `rfft`: Real FFT (O(N log N), requires power-of-2 size) [MOST COMMON]
+   * - `fft`: Complex FFT (O(N log N), requires power-of-2)
+   * - `rdft`: Real DFT (O(N²), works with any size)
    * - `dft`: Complex DFT (O(N²), works with any size)
-   * - `rfft`: Real FFT for real signals (O(N log N), outputs N/2+1 bins)
-   * - `rdft`: Real DFT for real signals (O(N²), outputs N/2+1 bins)
    *
    * **Output Formats:**
-   * - `complex`: Returns interleaved [real0, imag0, real1, imag1, ...]
-   * - `magnitude`: Returns |X[k]| = sqrt(real² + imag²)
-   * - `power`: Returns |X[k]|² = real² + imag²
-   * - `phase`: Returns ∠X[k] = atan2(imag, real)
+   * - `magnitude`: |X[k]| = sqrt(real² + imag²) [DEFAULT]
+   * - `power`: |X[k]|² = real² + imag²
+   * - `phase`: ∠X[k] = atan2(imag, real)
+   * - `complex`: Interleaved [real0, imag0, real1, imag1, ...]
+   *
+   * **Moving Mode Details:**
+   * - Internally delegates to `stft()` with Hann windowing
+   * - Uses CircularBufferArray for efficient buffering
+   * - Default hopSize = size/2 (50% overlap)
+   * - Better for time-varying signals (audio, EEG)
    *
    * @param params - FFT configuration
+   * @param params.mode - 'batch' (stateless) or 'moving' (sliding window) [default: 'batch']
    * @param params.size - FFT size (power of 2 for FFT/RFFT, any size for DFT/RDFT)
-   * @param params.type - Transform type (default: 'rfft' for real signals)
-   * @param params.forward - Forward (time→freq) or inverse (freq→time) (default: true)
-   * @param params.output - Output format (default: 'magnitude')
+   * @param params.hopSize - Window stride for 'moving' mode [default: size/2]
+   * @param params.type - Transform type [default: 'rfft']
+   * @param params.forward - Forward (time→freq) or inverse (freq→time) [default: true]
+   * @param params.output - Output format [default: 'magnitude']
    * @returns this instance for method chaining
    *
    * @example
-   * // Spectral analysis with magnitude output
+   * // Batch mode: Single FFT of entire buffer
    * pipeline.fft({
+   *   mode: 'batch',
    *   size: 1024,
    *   type: 'rfft',
    *   output: 'magnitude'
    * });
    *
    * @example
-   * // Power spectrum for energy analysis
+   * // Moving mode: STFT with 50% overlap
    * pipeline.fft({
-   *   size: 2048,
-   *   output: 'power'
-   * });
-   *
-   * @example
-   * // Complex FFT for phase information
-   * pipeline.fft({
+   *   mode: 'moving',
    *   size: 512,
-   *   type: 'fft',
-   *   output: 'complex'
+   *   hopSize: 256,  // 50% overlap
+   *   output: 'power'
    * });
    *
    * @example
@@ -2045,6 +2052,14 @@ class DspProcessor {
    *   type: 'rdft',
    *   output: 'magnitude'
    * });
+   *
+   * @example
+   * // Complex FFT for phase analysis
+   * pipeline.fft({
+   *   size: 512,
+   *   type: 'fft',
+   *   output: 'complex'
+   * });
    */
   fft(params: fftParams): this {
     if (!params.size || params.size <= 0 || !Number.isInteger(params.size)) {
@@ -2053,9 +2068,32 @@ class DspProcessor {
       );
     }
 
+    const mode = params.mode || "batch";
     const type = params.type || "rfft";
     const forward = params.forward ?? true;
     const output = params.output || "magnitude";
+    const hopSize = params.hopSize ?? Math.floor(params.size / 2);
+
+    // Validate mode
+    if (mode !== "batch" && mode !== "moving") {
+      throw new TypeError(
+        `Fft: mode must be 'batch' or 'moving', got '${mode}'`
+      );
+    }
+
+    // Validate hopSize for moving mode
+    if (mode === "moving") {
+      if (hopSize <= 0 || !Number.isInteger(hopSize)) {
+        throw new TypeError(
+          `Fft: hopSize must be a positive integer, got ${hopSize}`
+        );
+      }
+      if (hopSize > params.size) {
+        throw new TypeError(
+          `Fft: hopSize (${hopSize}) cannot exceed size (${params.size})`
+        );
+      }
+    }
 
     // Validate type
     const validTypes = ["fft", "dft", "rfft", "rdft"];
@@ -2083,15 +2121,35 @@ class DspProcessor {
       );
     }
 
+    // MOVING MODE: Delegate to STFT (which uses MovingFftFilter internally)
+    if (mode === "moving") {
+      // Map FFT parameters to STFT parameters
+      const stftMethod = type === "fft" || type === "rfft" ? "fft" : "dft";
+      const stftType = type.includes("r") ? "real" : "complex";
+
+      return this.stft({
+        windowSize: params.size,
+        hopSize: hopSize,
+        method: stftMethod,
+        type: stftType,
+        forward: forward,
+        output: output,
+        window: "hann", // Default window for moving mode (better spectral leakage control)
+      });
+    }
+
+    // BATCH MODE: Use stateless FftStage
     this.nativeInstance.addStage("fft", {
+      mode,
       size: params.size,
+      hopSize,
       type,
       forward,
       output,
     });
 
     const direction = forward ? "forward" : "inverse";
-    this.stages.push(`fft:${type}:${params.size}:${direction}:${output}`);
+    this.stages.push(`fft:${type}:${params.size}:batch:${direction}:${output}`);
     return this;
   }
 

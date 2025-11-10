@@ -66,6 +66,22 @@
     "xtr1common": "cpp",
     "complex": "cpp",
     "sstream": "cpp",
-    "variant": "cpp"
+    "variant": "cpp",
+    "array": "cpp",
+    "chrono": "cpp",
+    "condition_variable": "cpp",
+    "csetjmp": "cpp",
+    "forward_list": "cpp",
+    "fstream": "cpp",
+    "future": "cpp",
+    "iomanip": "cpp",
+    "map": "cpp",
+    "queue": "cpp",
+    "random": "cpp",
+    "set": "cpp",
+    "stack": "cpp",
+    "unordered_set": "cpp",
+    "valarray": "cpp",
+    "xtree": "cpp"
   }
 }

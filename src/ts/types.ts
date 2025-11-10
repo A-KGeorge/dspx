@@ -1248,8 +1248,24 @@ export interface CrossCorrelationOptions {
  * Parameters for FFT processing in pipeline
  */
 export interface fftParams {
+  /**
+   * Processing mode
+   * - 'batch': Stateless FFT (entire input → single FFT output)
+   * - 'moving': Stateful sliding window FFT (overlapping windows, STFT-style)
+   * Default: 'batch'
+   */
+  mode?: "batch" | "moving";
+
   /** FFT size (must be power of 2 for FFT, any size for DFT) */
   size: number;
+
+  /**
+   * Hop size (stride) between windows in 'moving' mode
+   * - Must be positive integer <= size
+   * - Default: size/2 (50% overlap)
+   * - Only used in 'moving' mode
+   */
+  hopSize?: number;
 
   /**
    * Transform type

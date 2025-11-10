@@ -51,7 +51,7 @@ namespace dsp
             // ========== Public Transform Methods ==========
 
             template <typename T>
-            void FftpackContext<T>::rfft(const T *input, std::complex<T> *output)
+            void FftpackContext<T>::rfft(const T *__restrict input, std::complex<T> *__restrict output)
             {
                 if (m_n == 1)
                 {
@@ -59,15 +59,15 @@ namespace dsp
                     return;
                 }
 
-                // Copy input to work buffer
-                std::copy(input, input + m_n, m_workBuffer.data());
+                // OPTIMIZATION: Use memcpy for bulk copy (faster than std::copy for POD types)
+                std::memcpy(m_workBuffer.data(), input, m_n * sizeof(T));
 
                 // Perform forward real FFT
                 drftf1(m_n, m_workBuffer.data(), m_wsave.data(), m_wsave.data() + m_n, m_ifac.data());
 
+                // OPTIMIZATION: Improved format conversion with better cache locality
                 // Convert FFTPACK halfcomplex format to standard complex format
                 // FFTPACK stores: [DC, re1, re2, ..., reN/2-1, Nyquist, im1, im2, ..., imN/2-1]
-                // (for even N)
 
                 size_t halfSize = (m_n / 2) + 1;
 
@@ -76,17 +76,37 @@ namespace dsp
 
                 if (m_n % 2 == 0)
                 {
-                    // Even N: Nyquist is at position m_n/2
-                    for (size_t i = 1; i < m_n / 2; ++i)
+                    // OPTIMIZATION: Even N - process in order for better cache locality
+                    size_t half = m_n / 2;
+
+                    // Process middle frequencies (unrolled by 2 for better ILP)
+                    size_t i = 1;
+                    for (; i + 1 < half; i += 2)
+                    {
+                        // First pair
+                        output[i] = std::complex<T>(m_workBuffer[2 * i - 1], m_workBuffer[2 * i]);
+                        // Second pair
+                        output[i + 1] = std::complex<T>(m_workBuffer[2 * (i + 1) - 1], m_workBuffer[2 * (i + 1)]);
+                    }
+                    // Handle remainder
+                    for (; i < half; ++i)
                     {
                         output[i] = std::complex<T>(m_workBuffer[2 * i - 1], m_workBuffer[2 * i]);
                     }
-                    output[m_n / 2] = std::complex<T>(m_workBuffer[m_n - 1], 0);
+
+                    // Nyquist component (real)
+                    output[half] = std::complex<T>(m_workBuffer[m_n - 1], 0);
                 }
                 else
                 {
-                    // Odd N: no separate Nyquist
-                    for (size_t i = 1; i < halfSize; ++i)
+                    // OPTIMIZATION: Odd N - unrolled loop
+                    size_t i = 1;
+                    for (; i + 1 < halfSize; i += 2)
+                    {
+                        output[i] = std::complex<T>(m_workBuffer[2 * i - 1], m_workBuffer[2 * i]);
+                        output[i + 1] = std::complex<T>(m_workBuffer[2 * (i + 1) - 1], m_workBuffer[2 * (i + 1)]);
+                    }
+                    for (; i < halfSize; ++i)
                     {
                         output[i] = std::complex<T>(m_workBuffer[2 * i - 1], m_workBuffer[2 * i]);
                     }
@@ -94,7 +114,7 @@ namespace dsp
             }
 
             template <typename T>
-            void FftpackContext<T>::irfft(const std::complex<T> *input, T *output)
+            void FftpackContext<T>::irfft(const std::complex<T> *__restrict input, T *__restrict output)
             {
                 if (m_n == 1)
                 {
@@ -102,24 +122,46 @@ namespace dsp
                     return;
                 }
 
+                // OPTIMIZATION: Improved format conversion with loop unrolling
                 // Convert standard complex format to FFTPACK halfcomplex format
                 m_workBuffer[0] = input[0].real(); // DC
 
                 if (m_n % 2 == 0)
                 {
-                    // Even N
-                    for (size_t i = 1; i < m_n / 2; ++i)
+                    // OPTIMIZATION: Even N - unrolled conversion
+                    size_t half = m_n / 2;
+                    size_t i = 1;
+
+                    // Unroll by 2
+                    for (; i + 1 < half; i += 2)
+                    {
+                        m_workBuffer[2 * i - 1] = input[i].real();
+                        m_workBuffer[2 * i] = input[i].imag();
+                        m_workBuffer[2 * (i + 1) - 1] = input[i + 1].real();
+                        m_workBuffer[2 * (i + 1)] = input[i + 1].imag();
+                    }
+                    for (; i < half; ++i)
                     {
                         m_workBuffer[2 * i - 1] = input[i].real();
                         m_workBuffer[2 * i] = input[i].imag();
                     }
-                    m_workBuffer[m_n - 1] = input[m_n / 2].real(); // Nyquist
+                    m_workBuffer[m_n - 1] = input[half].real(); // Nyquist
                 }
                 else
                 {
-                    // Odd N
+                    // OPTIMIZATION: Odd N - unrolled conversion
                     size_t halfSize = (m_n / 2) + 1;
-                    for (size_t i = 1; i < halfSize; ++i)
+                    size_t i = 1;
+
+                    // Unroll by 2
+                    for (; i + 1 < halfSize; i += 2)
+                    {
+                        m_workBuffer[2 * i - 1] = input[i].real();
+                        m_workBuffer[2 * i] = input[i].imag();
+                        m_workBuffer[2 * (i + 1) - 1] = input[i + 1].real();
+                        m_workBuffer[2 * (i + 1)] = input[i + 1].imag();
+                    }
+                    for (; i < halfSize; ++i)
                     {
                         m_workBuffer[2 * i - 1] = input[i].real();
                         m_workBuffer[2 * i] = input[i].imag();
@@ -129,8 +171,8 @@ namespace dsp
                 // Perform inverse real FFT
                 drftb1(m_n, m_workBuffer.data(), m_wsave.data(), m_wsave.data() + m_n, m_ifac.data());
 
-                // Copy result (FFTPACK doesn't normalize)
-                std::copy(m_workBuffer.begin(), m_workBuffer.end(), output);
+                // OPTIMIZATION: Use memcpy for bulk copy
+                std::memcpy(output, m_workBuffer.data(), m_n * sizeof(T));
             }
 
             // ========== FFTPACK Initialization ==========

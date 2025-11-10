@@ -158,6 +158,9 @@ namespace dsp
 
             outputSize = numFrames * outputSizePerFrame * numChannels;
 
+            // OPTIMIZATION: Process all frames and channels with minimal memory operations
+            // Use pre-allocated member buffers to avoid repeated allocations
+
             for (size_t frame = 0; frame < numFrames; ++frame)
             {
                 for (size_t ch = 0; ch < static_cast<size_t>(numChannels); ++ch)
@@ -165,43 +168,134 @@ namespace dsp
                     const float *frameInput = inputBuffer + (frame * inputSizePerFrame * numChannels) + ch;
                     float *frameOutput = outputBuffer + (frame * outputSizePerFrame * numChannels) + ch;
 
-                    // Load input based on transform direction
+                    // OPTIMIZATION 1: Minimize conditional branches - process by transform type
+                    // OPTIMIZATION 2: Use member buffers (already allocated in constructor)
+
+                    // Load input data (OPTIMIZED: Loop unrolling + better ILP)
                     if (isInverseComplex)
                     {
-                        // Input is complex interleaved: [real0, imag0, real1, imag1, ...]
-                        for (size_t i = 0; i < m_fftSize; ++i)
+                        // Complex input: deinterleave directly into complex buffer
+                        // OPTIMIZATION: Unroll by 4 for better instruction-level parallelism
+                        size_t i = 0;
+                        const size_t stride = numChannels;
+                        const size_t stride2 = 2 * stride;
+
+                        // Process 4 complex numbers at a time
+                        for (; i + 3 < m_fftSize; i += 4)
                         {
-                            m_complexBuffer[i] = std::complex<float>(
-                                frameInput[(i * 2) * numChannels],      // real part
-                                frameInput[(i * 2 + 1) * numChannels]); // imag part
+                            size_t idx0 = (i * 2) * stride;
+                            size_t idx1 = ((i + 1) * 2) * stride;
+                            size_t idx2 = ((i + 2) * 2) * stride;
+                            size_t idx3 = ((i + 3) * 2) * stride;
+
+                            m_complexBuffer[i] = std::complex<float>(frameInput[idx0], frameInput[idx0 + stride]);
+                            m_complexBuffer[i + 1] = std::complex<float>(frameInput[idx1], frameInput[idx1 + stride]);
+                            m_complexBuffer[i + 2] = std::complex<float>(frameInput[idx2], frameInput[idx2 + stride]);
+                            m_complexBuffer[i + 3] = std::complex<float>(frameInput[idx3], frameInput[idx3 + stride]);
+                        }
+
+                        // Handle remainder
+                        for (; i < m_fftSize; ++i)
+                        {
+                            size_t idx = (i * 2) * stride;
+                            m_complexBuffer[i] = std::complex<float>(frameInput[idx], frameInput[idx + stride]);
                         }
                     }
                     else if (isInverseReal)
                     {
-                        // Input is half-spectrum complex
+                        // Half-spectrum complex input: deinterleave with loop unrolling
                         size_t halfSize = m_engine->getHalfSize();
-                        for (size_t i = 0; i < halfSize; ++i)
+                        size_t i = 0;
+                        const size_t stride = numChannels;
+
+                        // Unroll by 4
+                        for (; i + 3 < halfSize; i += 4)
                         {
-                            m_complexBuffer[i] = std::complex<float>(
-                                frameInput[(i * 2) * numChannels],
-                                frameInput[(i * 2 + 1) * numChannels]);
+                            size_t idx0 = (i * 2) * stride;
+                            size_t idx1 = ((i + 1) * 2) * stride;
+                            size_t idx2 = ((i + 2) * 2) * stride;
+                            size_t idx3 = ((i + 3) * 2) * stride;
+
+                            m_complexBuffer[i] = std::complex<float>(frameInput[idx0], frameInput[idx0 + stride]);
+                            m_complexBuffer[i + 1] = std::complex<float>(frameInput[idx1], frameInput[idx1 + stride]);
+                            m_complexBuffer[i + 2] = std::complex<float>(frameInput[idx2], frameInput[idx2 + stride]);
+                            m_complexBuffer[i + 3] = std::complex<float>(frameInput[idx3], frameInput[idx3 + stride]);
+                        }
+
+                        // Handle remainder
+                        for (; i < halfSize; ++i)
+                        {
+                            size_t idx = (i * 2) * stride;
+                            m_complexBuffer[i] = std::complex<float>(frameInput[idx], frameInput[idx + stride]);
                         }
                     }
                     else
                     {
-                        // Deinterleave real channel data
-                        for (size_t i = 0; i < m_fftSize; ++i)
+                        // Real input: deinterleave with loop unrolling
+                        // OPTIMIZATION: Special case for numChannels == 1 (no deinterleaving needed)
+                        if (numChannels == 1)
                         {
-                            m_realBuffer[i] = frameInput[i * numChannels];
+                            // Direct memcpy when no deinterleaving needed
+                            std::memcpy(m_realBuffer.data(), frameInput, m_fftSize * sizeof(float));
+                        }
+                        else
+                        {
+                            // Deinterleave with unrolling by 8 for better ILP
+                            size_t i = 0;
+                            const size_t stride = numChannels;
+
+                            for (; i + 7 < m_fftSize; i += 8)
+                            {
+                                m_realBuffer[i] = frameInput[i * stride];
+                                m_realBuffer[i + 1] = frameInput[(i + 1) * stride];
+                                m_realBuffer[i + 2] = frameInput[(i + 2) * stride];
+                                m_realBuffer[i + 3] = frameInput[(i + 3) * stride];
+                                m_realBuffer[i + 4] = frameInput[(i + 4) * stride];
+                                m_realBuffer[i + 5] = frameInput[(i + 5) * stride];
+                                m_realBuffer[i + 6] = frameInput[(i + 6) * stride];
+                                m_realBuffer[i + 7] = frameInput[(i + 7) * stride];
+                            }
+
+                            // Handle remainder
+                            for (; i < m_fftSize; ++i)
+                            {
+                                m_realBuffer[i] = frameInput[i * stride];
+                            }
                         }
                     }
 
-                    // Perform transform based on type and direction
-                    switch (m_type)
+                    // Perform transform (OPTIMIZED: Reduced switch cases, grouped by category)
+                    if (isInverseComplex)
                     {
-                    case TransformType::FFT:
+                        // All complex inverse transforms
+                        if (m_type == TransformType::IFFT || (m_type == TransformType::FFT && !m_forward))
+                        {
+                            m_engine->ifft(m_complexBuffer.data(), m_complexBuffer.data());
+                        }
+                        else // IDFT or (DFT && !forward)
+                        {
+                            m_engine->idft(m_complexBuffer.data(), m_tempComplexBuffer.data());
+                            // OPTIMIZATION: Use memcpy instead of std::copy for POD types
+                            std::memcpy(m_complexBuffer.data(), m_tempComplexBuffer.data(),
+                                        m_fftSize * sizeof(std::complex<float>));
+                        }
+                    }
+                    else if (isInverseReal)
                     {
-                        if (m_forward)
+                        // All real inverse transforms
+                        if (m_type == TransformType::IRFFT || (m_type == TransformType::RFFT && !m_forward))
+                        {
+                            m_engine->irfft(m_complexBuffer.data(), m_realBuffer.data());
+                        }
+                        else // IRDFT or (RDFT && !forward)
+                        {
+                            m_engine->irdft(m_complexBuffer.data(), m_realBuffer.data());
+                        }
+                    }
+                    else
+                    {
+                        // Forward transforms
+                        if (m_type == TransformType::FFT)
                         {
                             // Forward FFT: real to complex
                             for (size_t i = 0; i < m_fftSize; ++i)
@@ -210,22 +304,7 @@ namespace dsp
                             }
                             m_engine->fft(m_complexBuffer.data(), m_complexBuffer.data());
                         }
-                        else
-                        {
-                            // Inverse FFT: complex input already loaded
-                            m_engine->ifft(m_complexBuffer.data(), m_complexBuffer.data());
-                        }
-                        break;
-                    }
-                    case TransformType::IFFT:
-                    {
-                        // Complex input already loaded into m_complexBuffer
-                        m_engine->ifft(m_complexBuffer.data(), m_complexBuffer.data());
-                        break;
-                    }
-                    case TransformType::DFT:
-                    {
-                        if (m_forward)
+                        else if (m_type == TransformType::DFT)
                         {
                             // Forward DFT: real to complex
                             for (size_t i = 0; i < m_fftSize; ++i)
@@ -233,138 +312,183 @@ namespace dsp
                                 m_complexBuffer[i] = std::complex<float>(m_realBuffer[i], 0.0f);
                             }
                             m_engine->dft(m_complexBuffer.data(), m_tempComplexBuffer.data());
-                            std::copy(m_tempComplexBuffer.begin(), m_tempComplexBuffer.end(), m_complexBuffer.begin());
+                            // OPTIMIZATION: Use memcpy instead of std::copy
+                            std::memcpy(m_complexBuffer.data(), m_tempComplexBuffer.data(),
+                                        m_fftSize * sizeof(std::complex<float>));
                         }
-                        else
-                        {
-                            // Inverse DFT: complex input already loaded
-                            m_engine->idft(m_complexBuffer.data(), m_tempComplexBuffer.data());
-                            std::copy(m_tempComplexBuffer.begin(), m_tempComplexBuffer.end(), m_complexBuffer.begin());
-                        }
-                        break;
-                    }
-                    case TransformType::IDFT:
-                    {
-                        // Complex input already loaded into m_complexBuffer
-                        m_engine->idft(m_complexBuffer.data(), m_tempComplexBuffer.data());
-                        std::copy(m_tempComplexBuffer.begin(), m_tempComplexBuffer.end(), m_complexBuffer.begin());
-                        break;
-                    }
-                    case TransformType::RFFT:
-                    {
-                        if (m_forward)
+                        else if (m_type == TransformType::RFFT)
                         {
                             m_engine->rfft(m_realBuffer.data(), m_complexBuffer.data());
                         }
-                        else
-                        {
-                            // Inverse RFFT: half-spectrum complex input already loaded
-                            m_engine->irfft(m_complexBuffer.data(), m_realBuffer.data());
-                        }
-                        break;
-                    }
-                    case TransformType::IRFFT:
-                    {
-                        // Half-spectrum complex input already loaded into m_complexBuffer
-                        m_engine->irfft(m_complexBuffer.data(), m_realBuffer.data());
-                        break;
-                    }
-                    case TransformType::RDFT:
-                    {
-                        if (m_forward)
+                        else // RDFT
                         {
                             m_engine->rdft(m_realBuffer.data(), m_complexBuffer.data());
                         }
-                        else
-                        {
-                            // Inverse RDFT: half-spectrum complex input already loaded
-                            m_engine->irdft(m_complexBuffer.data(), m_realBuffer.data());
-                        }
-                        break;
-                    }
-                    case TransformType::IRDFT:
-                    {
-                        // Half-spectrum complex input already loaded into m_complexBuffer
-                        m_engine->irdft(m_complexBuffer.data(), m_realBuffer.data());
-                        break;
-                    }
                     }
 
-                    // Convert to output format
+                    // Write output (OPTIMIZED: Loop unrolling for interleaving)
                     if (isInverseReal || isInverseComplex)
                     {
                         // ALL inverse transforms output real time-domain values
-                        if (isInverseReal)
+                        const float *sourceData = isInverseReal ? m_realBuffer.data() : nullptr;
+
+                        // OPTIMIZATION: Special case for single channel (no interleaving)
+                        if (numChannels == 1)
                         {
-                            // Real inverse transforms: use m_realBuffer directly
-                            for (size_t i = 0; i < m_fftSize; ++i)
+                            if (isInverseReal)
                             {
-                                frameOutput[i * numChannels] = m_realBuffer[i];
+                                std::memcpy(frameOutput, m_realBuffer.data(), m_fftSize * sizeof(float));
+                            }
+                            else
+                            {
+                                // Extract real parts - unroll by 8
+                                size_t i = 0;
+                                for (; i + 7 < m_fftSize; i += 8)
+                                {
+                                    frameOutput[i] = m_complexBuffer[i].real();
+                                    frameOutput[i + 1] = m_complexBuffer[i + 1].real();
+                                    frameOutput[i + 2] = m_complexBuffer[i + 2].real();
+                                    frameOutput[i + 3] = m_complexBuffer[i + 3].real();
+                                    frameOutput[i + 4] = m_complexBuffer[i + 4].real();
+                                    frameOutput[i + 5] = m_complexBuffer[i + 5].real();
+                                    frameOutput[i + 6] = m_complexBuffer[i + 6].real();
+                                    frameOutput[i + 7] = m_complexBuffer[i + 7].real();
+                                }
+                                for (; i < m_fftSize; ++i)
+                                {
+                                    frameOutput[i] = m_complexBuffer[i].real();
+                                }
                             }
                         }
                         else
                         {
-                            // IFFT/IDFT: extract real parts from complex result
-                            for (size_t i = 0; i < m_fftSize; ++i)
+                            // Interleave with loop unrolling by 4
+                            size_t i = 0;
+                            const size_t stride = numChannels;
+
+                            for (; i + 3 < m_fftSize; i += 4)
                             {
-                                frameOutput[i * numChannels] = m_complexBuffer[i].real();
+                                if (isInverseReal)
+                                {
+                                    frameOutput[i * stride] = m_realBuffer[i];
+                                    frameOutput[(i + 1) * stride] = m_realBuffer[i + 1];
+                                    frameOutput[(i + 2) * stride] = m_realBuffer[i + 2];
+                                    frameOutput[(i + 3) * stride] = m_realBuffer[i + 3];
+                                }
+                                else
+                                {
+                                    frameOutput[i * stride] = m_complexBuffer[i].real();
+                                    frameOutput[(i + 1) * stride] = m_complexBuffer[i + 1].real();
+                                    frameOutput[(i + 2) * stride] = m_complexBuffer[i + 2].real();
+                                    frameOutput[(i + 3) * stride] = m_complexBuffer[i + 3].real();
+                                }
+                            }
+
+                            // Handle remainder
+                            for (; i < m_fftSize; ++i)
+                            {
+                                frameOutput[i * stride] = isInverseReal
+                                                              ? m_realBuffer[i]
+                                                              : m_complexBuffer[i].real();
                             }
                         }
                     }
                     else
                     {
-                        // Forward transforms only
+                        // Forward transforms - write output based on format
                         switch (m_format)
                         {
                         case OutputFormat::COMPLEX:
                         {
-                            // Interleave real/imag
+                            // OPTIMIZATION: Calculate numBins once, interleave with loop unrolling
                             size_t numBins = (m_type == TransformType::RFFT || m_type == TransformType::RDFT)
                                                  ? m_engine->getHalfSize()
                                                  : m_fftSize;
-                            for (size_t i = 0; i < numBins; ++i)
+
+                            // OPTIMIZATION: Unroll complex interleaving by 4
+                            size_t i = 0;
+                            const size_t stride = numChannels;
+
+                            for (; i + 3 < numBins; i += 4)
                             {
-                                frameOutput[(i * 2) * numChannels] = m_complexBuffer[i].real();
-                                frameOutput[(i * 2 + 1) * numChannels] = m_complexBuffer[i].imag();
+                                size_t outIdx0 = (i * 2) * stride;
+                                size_t outIdx1 = ((i + 1) * 2) * stride;
+                                size_t outIdx2 = ((i + 2) * 2) * stride;
+                                size_t outIdx3 = ((i + 3) * 2) * stride;
+
+                                frameOutput[outIdx0] = m_complexBuffer[i].real();
+                                frameOutput[outIdx0 + stride] = m_complexBuffer[i].imag();
+                                frameOutput[outIdx1] = m_complexBuffer[i + 1].real();
+                                frameOutput[outIdx1 + stride] = m_complexBuffer[i + 1].imag();
+                                frameOutput[outIdx2] = m_complexBuffer[i + 2].real();
+                                frameOutput[outIdx2 + stride] = m_complexBuffer[i + 2].imag();
+                                frameOutput[outIdx3] = m_complexBuffer[i + 3].real();
+                                frameOutput[outIdx3 + stride] = m_complexBuffer[i + 3].imag();
+                            }
+
+                            // Handle remainder
+                            for (; i < numBins; ++i)
+                            {
+                                size_t outIdx = (i * 2) * stride;
+                                frameOutput[outIdx] = m_complexBuffer[i].real();
+                                frameOutput[outIdx + stride] = m_complexBuffer[i].imag();
                             }
                             break;
                         }
                         case OutputFormat::MAGNITUDE:
-                        {
-                            size_t numBins = (m_type == TransformType::RFFT || m_type == TransformType::RDFT)
-                                                 ? m_engine->getHalfSize()
-                                                 : m_fftSize;
-                            std::vector<float> magnitudes(numBins);
-                            m_engine->getMagnitude(m_complexBuffer.data(), magnitudes.data(), numBins);
-                            for (size_t i = 0; i < numBins; ++i)
-                            {
-                                frameOutput[i * numChannels] = magnitudes[i];
-                            }
-                            break;
-                        }
                         case OutputFormat::POWER:
-                        {
-                            size_t numBins = (m_type == TransformType::RFFT || m_type == TransformType::RDFT)
-                                                 ? m_engine->getHalfSize()
-                                                 : m_fftSize;
-                            std::vector<float> power(numBins);
-                            m_engine->getPower(m_complexBuffer.data(), power.data(), numBins);
-                            for (size_t i = 0; i < numBins; ++i)
-                            {
-                                frameOutput[i * numChannels] = power[i];
-                            }
-                            break;
-                        }
                         case OutputFormat::PHASE:
                         {
+                            // OPTIMIZATION: Use stack buffer for small sizes, avoid heap allocation
                             size_t numBins = (m_type == TransformType::RFFT || m_type == TransformType::RDFT)
                                                  ? m_engine->getHalfSize()
                                                  : m_fftSize;
-                            std::vector<float> phases(numBins);
-                            m_engine->getPhase(m_complexBuffer.data(), phases.data(), numBins);
-                            for (size_t i = 0; i < numBins; ++i)
+
+                            // Use member realBuffer for temporary storage (already allocated)
+                            float *tempOutput = m_realBuffer.data(); // Reuse buffer
+
+                            if (m_format == OutputFormat::MAGNITUDE)
                             {
-                                frameOutput[i * numChannels] = phases[i];
+                                m_engine->getMagnitude(m_complexBuffer.data(), tempOutput, numBins);
+                            }
+                            else if (m_format == OutputFormat::POWER)
+                            {
+                                m_engine->getPower(m_complexBuffer.data(), tempOutput, numBins);
+                            }
+                            else // PHASE
+                            {
+                                m_engine->getPhase(m_complexBuffer.data(), tempOutput, numBins);
+                            }
+
+                            // Write to output with stride (OPTIMIZED: Loop unrolling + special case)
+                            if (numChannels == 1)
+                            {
+                                // Direct memcpy for single channel
+                                std::memcpy(frameOutput, tempOutput, numBins * sizeof(float));
+                            }
+                            else
+                            {
+                                // Interleave with loop unrolling by 8
+                                size_t i = 0;
+                                const size_t stride = numChannels;
+
+                                for (; i + 7 < numBins; i += 8)
+                                {
+                                    frameOutput[i * stride] = tempOutput[i];
+                                    frameOutput[(i + 1) * stride] = tempOutput[i + 1];
+                                    frameOutput[(i + 2) * stride] = tempOutput[i + 2];
+                                    frameOutput[(i + 3) * stride] = tempOutput[i + 3];
+                                    frameOutput[(i + 4) * stride] = tempOutput[i + 4];
+                                    frameOutput[(i + 5) * stride] = tempOutput[i + 5];
+                                    frameOutput[(i + 6) * stride] = tempOutput[i + 6];
+                                    frameOutput[(i + 7) * stride] = tempOutput[i + 7];
+                                }
+
+                                // Handle remainder
+                                for (; i < numBins; ++i)
+                                {
+                                    frameOutput[i * stride] = tempOutput[i];
+                                }
                             }
                             break;
                         }
