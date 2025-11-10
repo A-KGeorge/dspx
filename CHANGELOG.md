@@ -1,5 +1,11 @@
 # dspx
 
+## 1.1.5
+
+### Patch Changes
+
+- [`f1d5b53`](https://github.com/A-KGeorge/dspx/commit/f1d5b53169256cfc84634c1a51b031a7101953d9) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - optimized pipeline fft
+
 ## 1.1.4
 
 ### Patch Changes
