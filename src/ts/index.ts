@@ -3,7 +3,7 @@
 if (typeof process !== "undefined" && process.on) {
   // Only add handlers if they haven't been added yet (check for existing listeners)
   const existingHandlers = process.listenerCount("unhandledRejection");
-  
+
   if (existingHandlers === 0) {
     process.on("unhandledRejection", (reason: any, promise: Promise<any>) => {
       console.error("[dspx] Unhandled Promise Rejection:", reason);
@@ -14,7 +14,8 @@ if (typeof process !== "undefined" && process.on) {
     });
 
     // Handle uncaught exceptions gracefully
-    const existingExceptionHandlers = process.listenerCount("uncaughtException");
+    const existingExceptionHandlers =
+      process.listenerCount("uncaughtException");
     if (existingExceptionHandlers === 0) {
       process.on("uncaughtException", (error: Error) => {
         console.error("[dspx] Uncaught Exception:", error.message);
