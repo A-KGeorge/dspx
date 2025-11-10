@@ -319,7 +319,10 @@ namespace dsp
                         case OutputFormat::COMPLEX:
                         {
                             // Interleave real/imag
-                            for (size_t i = 0; i < m_fftSize; ++i)
+                            size_t numBins = (m_type == TransformType::RFFT || m_type == TransformType::RDFT)
+                                                 ? m_engine->getHalfSize()
+                                                 : m_fftSize;
+                            for (size_t i = 0; i < numBins; ++i)
                             {
                                 frameOutput[(i * 2) * numChannels] = m_complexBuffer[i].real();
                                 frameOutput[(i * 2 + 1) * numChannels] = m_complexBuffer[i].imag();

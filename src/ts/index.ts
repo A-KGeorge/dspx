@@ -1,7 +1,7 @@
 // Global error handlers for unhandled promise rejections
-// This prevents the library from crashing Node.js processes with exit code 1
+// This prevents the library from crashing Node.js processes
 if (typeof process !== "undefined" && process.on) {
-  // Only add handlers if they haven't been added yet (check for existing listeners)
+  // Only add handlers if they haven't been added yet
   const existingHandlers = process.listenerCount("unhandledRejection");
 
   if (existingHandlers === 0) {
@@ -10,18 +10,23 @@ if (typeof process !== "undefined" && process.on) {
       if (reason instanceof Error) {
         console.error("[dspx] Stack trace:", reason.stack);
       }
-      // Don't crash the process - log and continue
+      // Log and continue - don't crash the process
     });
 
-    // Handle uncaught exceptions gracefully
+    // Handle uncaught exceptions
     const existingExceptionHandlers =
       process.listenerCount("uncaughtException");
     if (existingExceptionHandlers === 0) {
       process.on("uncaughtException", (error: Error) => {
         console.error("[dspx] Uncaught Exception:", error.message);
         console.error("[dspx] Stack trace:", error.stack);
-        // Exit with error code since this is more serious
-        process.exit(1);
+        // Only exit on truly fatal errors
+        const isFatal =
+          error.message?.includes("FATAL") ||
+          error.message?.includes("SIGSEGV");
+        if (isFatal) {
+          process.exit(1);
+        }
       });
     }
   }
