@@ -712,15 +712,37 @@ class DspProcessor {
 
   /**
    * Add a convolution stage to the pipeline
-   * Applies a custom 1D kernel to the signal using either direct or FFT-based convolution
+   * Applies a 1D kernel to the signal using either direct or FFT-based convolution
+   *
+   * **Two Processing Modes:**
+   * 1. **Batch mode** (stateless): Standard convolution, output length = N - M + 1
+   * 2. **Moving mode** (stateful): Streaming convolution, maintains buffer, output length = N
    *
    * @param params - Convolution parameters
+   * @param params.kernel - 1D filter kernel (time-domain)
+   * @param params.mode - 'batch' (stateless, valid convolution) or 'moving' (stateful, streaming) [default: 'moving']
+   * @param params.method - 'auto' (smart selection), 'direct' (time-domain), or 'fft' (frequency-domain) [default: 'auto']
    * @returns this instance for method chaining
+   *
+   * @example
+   * // BATCH MODE: Standard convolution (output length = N - M + 1)
+   * const input = new Float32Array([1, 2, 3, 4, 5]);
+   * const kernel = new Float32Array([1, 0, -1]);
+   * pipeline.convolution({ kernel, mode: "batch" });
+   * const output = await pipeline.process(input, { channels: 1 });
+   * // output: [-2, -2, -2] (length = 5 - 3 + 1 = 3)
+   *
+   * @example
+   * // MOVING MODE: Streaming convolution (output length = N)
+   * pipeline.convolution({ kernel: mySmoothingKernel, mode: "moving" });
+   * const chunk1 = await pipeline.process(data1, { channels: 1 });
+   * const chunk2 = await pipeline.process(data2, { channels: 1 });
+   * // State maintained between chunks, same length as input
    *
    * @example
    * // Simple smoothing kernel
    * const smoothKernel = new Float32Array([0.2, 0.6, 0.2]);
-   * pipeline.convolution({ kernel: smoothKernel });
+   * pipeline.convolution({ kernel: smoothKernel, mode: "batch" });
    *
    * @example
    * // Gaussian kernel with explicit method
@@ -742,11 +764,11 @@ class DspProcessor {
    * @example
    * // Multi-channel EMG grid with custom kernel
    * const emgGrid = new Float32Array(80000); // 10x8 grid, 1000 samples
-   * pipeline.convolution({ kernel: mySmoothingKernel });
+   * pipeline.convolution({ kernel: mySmoothingKernel, mode: "batch" });
    * const output = await pipeline.process(emgGrid, {
    *   sampleRate: 2000,
    *   channels: 80 // 10 * 8 sensors
-   * });\
+   * });
    */
   convolution(params: ConvolutionParams): this {
     if (!params.kernel || params.kernel.length === 0) {

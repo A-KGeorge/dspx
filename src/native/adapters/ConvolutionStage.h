@@ -66,15 +66,77 @@ namespace dsp::adapters
             return "convolution";
         }
 
+        /**
+         * @brief Batch mode convolution resizes the buffer (N -> N - M + 1).
+         *        Moving mode does not resize (N -> N).
+         */
+        bool isResizing() const override
+        {
+            return (m_mode == ConvolutionMode::Batch);
+        }
+
+        /**
+         * @brief Calculate output size for batch mode valid convolution.
+         *        Output length = (N - M + 1) * channels, where N is samplesPerChannel and M is kernel size.
+         */
+        size_t calculateOutputSize(size_t inputSize) const override
+        {
+            if (m_mode == ConvolutionMode::Moving)
+            {
+                return inputSize; // Same size output
+            }
+
+            // Batch mode: valid convolution reduces size
+            // inputSize is total samples (numSamples * numChannels)
+            // We'll handle the actual calculation in processResizing
+            return inputSize; // Will be recalculated with proper channel info in processResizing
+        }
+
         void process(float *buffer, size_t numSamples, int numChannels, const float *timestamps = nullptr) override
         {
             if (m_mode == ConvolutionMode::Batch)
             {
+                // Batch mode is handled by processResizing() since it resizes the buffer
+                // This should not be called for batch mode if isResizing() returns true
                 processBatch(buffer, numSamples, numChannels);
             }
             else // ConvolutionMode::Moving
             {
                 processMoving(buffer, numSamples, numChannels);
+            }
+        }
+
+        /**
+         * @brief Process with buffer resizing (for batch mode convolution).
+         *        Computes valid convolution where output length = N - M + 1.
+         */
+        void processResizing(const float *inputBuffer, size_t inputSize,
+                             float *outputBuffer, size_t &outputSize,
+                             int numChannels, const float *timestamps = nullptr) override
+        {
+            size_t samplesPerChannel = inputSize / numChannels;
+            size_t kernelSize = m_kernel.size();
+
+            // Valid convolution output length: N - M + 1
+            if (samplesPerChannel < kernelSize)
+            {
+                // Not enough samples for valid convolution
+                outputSize = 0;
+                return;
+            }
+
+            size_t outputSamplesPerChannel = samplesPerChannel - kernelSize + 1;
+            outputSize = outputSamplesPerChannel * numChannels;
+
+            // Copy input to temporary buffer (we'll process from inputBuffer to outputBuffer)
+            // For batch mode, we use the batch convolution logic
+            if (m_actualMethod == ConvolutionMethod::Direct)
+            {
+                processResizingDirect(inputBuffer, samplesPerChannel, outputBuffer, outputSamplesPerChannel, numChannels);
+            }
+            else // FFT
+            {
+                processResizingFFT(inputBuffer, samplesPerChannel, outputBuffer, outputSamplesPerChannel, numChannels);
             }
         }
 
@@ -278,17 +340,216 @@ namespace dsp::adapters
         }
 
         /**
-         * @brief Process in batch (stateless) mode.
+         * @brief Process in batch (stateless) mode - IN-PLACE VERSION.
+         *        Only used if isResizing() is false (which it's not for batch mode).
+         *        This is kept for backward compatibility but should use processResizing().
          */
         void processBatch(float *buffer, size_t numSamples, int numChannels)
         {
+            // For batch mode, we should be using processResizing() since isResizing() returns true
+            // But if called directly (legacy), we still handle it
+            size_t samplesPerChannel = numSamples / numChannels;
+            size_t kernelSize = m_kernel.size();
+
+            if (samplesPerChannel < kernelSize)
+            {
+                std::fill_n(buffer, numSamples, 0.0f);
+                return;
+            }
+
+            size_t outputSamplesPerChannel = samplesPerChannel - kernelSize + 1;
+            size_t outputSize = outputSamplesPerChannel * numChannels;
+
+            // Process using resizing logic but write back to same buffer (truncated)
             if (m_actualMethod == ConvolutionMethod::Direct)
             {
-                processBatchDirect(buffer, numSamples, numChannels);
+                processResizingDirect(buffer, samplesPerChannel, buffer, outputSamplesPerChannel, numChannels);
             }
             else // FFT
             {
-                processBatchFFT(buffer, numSamples, numChannels);
+                processResizingFFT(buffer, samplesPerChannel, buffer, outputSamplesPerChannel, numChannels);
+            }
+
+            // Note: buffer now contains outputSize valid samples at the beginning
+        }
+
+        /**
+         * @brief Direct convolution for batch mode - processes from input to output buffers.
+         *
+         * Computes VALID convolution where the kernel fully overlaps the signal.
+         * Output length is outputSamplesPerChannel = inputSamplesPerChannel - M + 1.
+         *
+         * For input [1,2,3,4,5] and kernel [1,0,-1]:
+         *   output[0] = 1*1 + 0*2 + (-1)*3 = -2
+         *   output[1] = 1*2 + 0*3 + (-1)*4 = -2
+         *   output[2] = 1*3 + 0*4 + (-1)*5 = -2
+         */
+        void processResizingDirect(const float *inputBuffer, size_t inputSamplesPerChannel,
+                                   float *outputBuffer, size_t outputSamplesPerChannel,
+                                   int numChannels)
+        {
+            size_t kernelSize = m_kernel.size();
+
+            // Resize de-interleaved buffers if needed
+            if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
+            {
+                m_deinterleaved_buffers.resize(numChannels);
+            }
+
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                if (m_deinterleaved_buffers[ch].size() != inputSamplesPerChannel)
+                {
+                    m_deinterleaved_buffers[ch].resize(inputSamplesPerChannel);
+                }
+            }
+
+            // Resize output buffer
+            if (m_temp_output_channel.size() != outputSamplesPerChannel)
+            {
+                m_temp_output_channel.resize(outputSamplesPerChannel);
+            }
+
+            // Step 1: De-interleave input data
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                for (size_t i = 0; i < inputSamplesPerChannel; ++i)
+                {
+                    m_deinterleaved_buffers[ch][i] = inputBuffer[i * numChannels + ch];
+                }
+            }
+
+            // Step 2: Process each channel - valid convolution
+            const float *kernelPtr = m_kernel.data();
+
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                const float *channelInput = m_deinterleaved_buffers[ch].data();
+                float *output = m_temp_output_channel.data();
+
+                // Valid convolution: y[n] = Σ h[k] * x[n+k] for k=0 to M-1
+                for (size_t n = 0; n < outputSamplesPerChannel; ++n)
+                {
+                    float sum = 0.0f;
+
+                    // Convolve kernel with signal at position n
+                    for (size_t k = 0; k < kernelSize; ++k)
+                    {
+                        sum += kernelPtr[k] * channelInput[n + k];
+                    }
+
+                    output[n] = sum;
+                }
+
+                // Step 3: Re-interleave output
+                for (size_t i = 0; i < outputSamplesPerChannel; ++i)
+                {
+                    outputBuffer[i * numChannels + ch] = output[i];
+                }
+            }
+        }
+
+        /**
+         * @brief FFT convolution for batch mode - processes from input to output buffers.
+         */
+        void processResizingFFT(const float *inputBuffer, size_t inputSamplesPerChannel,
+                                float *outputBuffer, size_t outputSamplesPerChannel,
+                                int numChannels)
+        {
+            size_t kernelSize = m_kernel.size();
+
+            // FFT convolution size must be at least inputSamplesPerChannel + kernelSize - 1
+            size_t fftSize = inputSamplesPerChannel + kernelSize - 1;
+
+            // Round up to next power of 2
+            size_t fftSizePow2 = 1;
+            while (fftSizePow2 < fftSize)
+            {
+                fftSizePow2 *= 2;
+            }
+
+            // Resize buffers if needed
+            if (m_batch_fft_size != fftSizePow2)
+            {
+                m_batch_fft_size = fftSizePow2;
+                size_t halfSize = fftSizePow2 / 2 + 1;
+
+                m_fft_engine = std::make_unique<core::FftEngine<float>>(fftSizePow2);
+
+                m_batch_kernel_padded.resize(fftSizePow2);
+                m_batch_kernel_fft.resize(halfSize);
+                m_batch_channel_data.resize(fftSizePow2);
+                m_batch_signal_fft.resize(halfSize);
+                m_batch_result.resize(fftSizePow2);
+
+                // Precompute kernel FFT
+                std::fill(m_batch_kernel_padded.begin(), m_batch_kernel_padded.end(), 0.0f);
+                std::copy(m_kernel.begin(), m_kernel.end(), m_batch_kernel_padded.begin());
+                m_fft_engine->rfft(m_batch_kernel_padded.data(), m_batch_kernel_fft.data());
+            }
+
+            size_t halfSize = m_batch_fft_size / 2 + 1;
+
+            // Resize de-interleaved buffers
+            if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
+            {
+                m_deinterleaved_buffers.resize(numChannels);
+            }
+
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                if (m_deinterleaved_buffers[ch].size() != inputSamplesPerChannel)
+                {
+                    m_deinterleaved_buffers[ch].resize(inputSamplesPerChannel);
+                }
+            }
+
+            if (m_temp_output_channel.size() != outputSamplesPerChannel)
+            {
+                m_temp_output_channel.resize(outputSamplesPerChannel);
+            }
+
+            // Step 1: De-interleave input data
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                for (size_t i = 0; i < inputSamplesPerChannel; ++i)
+                {
+                    m_deinterleaved_buffers[ch][i] = inputBuffer[i * numChannels + ch];
+                }
+            }
+
+            // Step 2: Process each channel
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                // Zero-pad channel data
+                std::fill(m_batch_channel_data.begin(), m_batch_channel_data.end(), 0.0f);
+                std::copy(m_deinterleaved_buffers[ch].begin(),
+                          m_deinterleaved_buffers[ch].end(),
+                          m_batch_channel_data.begin());
+
+                // FFT of signal
+                m_fft_engine->rfft(m_batch_channel_data.data(), m_batch_signal_fft.data());
+
+                // Complex multiplication in frequency domain
+                for (size_t i = 0; i < halfSize; ++i)
+                {
+                    m_batch_signal_fft[i] *= m_batch_kernel_fft[i];
+                }
+
+                // IFFT to get convolution result
+                m_fft_engine->irfft(m_batch_signal_fft.data(), m_batch_result.data());
+
+                // Copy valid portion to output buffer
+                for (size_t i = 0; i < outputSamplesPerChannel; ++i)
+                {
+                    m_temp_output_channel[i] = m_batch_result[i];
+                }
+
+                // Step 3: Re-interleave output
+                for (size_t i = 0; i < outputSamplesPerChannel; ++i)
+                {
+                    outputBuffer[i * numChannels + ch] = m_temp_output_channel[i];
+                }
             }
         }
 
@@ -334,88 +595,8 @@ namespace dsp::adapters
         }
 
         /**
-         * @brief Direct convolution in batch mode - TRUE "naive" C++ algorithm.
-         *
-         * This is the apples-to-apples comparison with the "naive JS" benchmark.
-         * It's a simple, stateless loop with NO circular buffers, NO window reversing,
-         * and NO per-sample memory copies. Just like the naive JS code, but with
-         * de-interleaving for cache-friendly processing and SIMD for the inner loop.
-         *
-         * For very small kernels (K=8), the simplicity of this algorithm allows the
-         * C++ compiler to optimize it aggressively (loop unrolling, SIMD vectorization).
+         * @brief Initialize overlap-add FFT state for each channel.
          */
-        void processBatchDirect(float *buffer, size_t numSamples, int numChannels)
-        {
-            size_t samplesPerChannel = numSamples / numChannels;
-            size_t kernelSize = m_kernel.size();
-
-            // Resize de-interleaved buffers if needed
-            if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
-            {
-                m_deinterleaved_buffers.resize(numChannels);
-                for (auto &buf : m_deinterleaved_buffers)
-                {
-                    buf.resize(samplesPerChannel);
-                }
-            }
-            else if (!m_deinterleaved_buffers.empty() &&
-                     m_deinterleaved_buffers[0].size() != samplesPerChannel)
-            {
-                for (auto &buf : m_deinterleaved_buffers)
-                {
-                    buf.resize(samplesPerChannel);
-                }
-            }
-
-            // Resize output buffer
-            if (m_temp_output_channel.size() != samplesPerChannel)
-            {
-                m_temp_output_channel.resize(samplesPerChannel);
-            }
-
-            // Step 1: De-interleave input data for cache-friendly processing
-            for (int ch = 0; ch < numChannels; ++ch)
-            {
-                for (size_t i = 0; i < samplesPerChannel; ++i)
-                {
-                    m_deinterleaved_buffers[ch][i] = buffer[i * numChannels + ch];
-                }
-            }
-
-            // Step 2: Process each channel - optimized batch convolution
-            const float *kernelPtr = m_kernel.data();
-
-            for (int ch = 0; ch < numChannels; ++ch)
-            {
-                const float *channelInput = m_deinterleaved_buffers[ch].data();
-                float *output = m_temp_output_channel.data();
-
-                // Standard convolution: y[n] = sum(h[k] * x[n-k])
-                for (size_t n = 0; n < samplesPerChannel; ++n)
-                {
-                    float sum = 0.0f;
-
-                    // Simple scalar loop (compiler may auto-vectorize)
-                    for (size_t k = 0; k < kernelSize; ++k)
-                    {
-                        if (n >= k)
-                        {
-                            sum += kernelPtr[k] * channelInput[n - k];
-                        }
-                    }
-
-                    output[n] = sum;
-                }
-
-                // Step 3: Re-interleave output back to original buffer
-                for (size_t i = 0; i < samplesPerChannel; ++i)
-                {
-                    buffer[i * numChannels + ch] = output[i];
-                }
-            }
-        } /**
-           * @brief Initialize overlap-add FFT state for each channel.
-           */
         void initializeOverlapAdd(int numChannels)
         {
             if (!m_is_initialized || static_cast<int>(m_overlap_buffers.size()) != numChannels)
@@ -518,116 +699,6 @@ namespace dsp::adapters
                     {
                         buffer[(pos + i) * numChannels + ch] = m_fft_output_buffer[i];
                     }
-                }
-            }
-        } /**
-           * @brief FFT convolution in batch mode.
-           *
-           * Uses FFT-based fast convolution: FFT(x) * FFT(h) -> IFFT
-           */
-        void processBatchFFT(float *buffer, size_t numSamples, int numChannels)
-        {
-            size_t samplesPerChannel = numSamples / numChannels;
-            size_t kernelSize = m_kernel.size();
-
-            // FFT convolution size must be at least N + M - 1
-            size_t fftSize = samplesPerChannel + kernelSize - 1;
-
-            // Round up to next power of 2 for efficiency
-            size_t fftSizePow2 = 1;
-            while (fftSizePow2 < fftSize)
-            {
-                fftSizePow2 *= 2;
-            }
-
-            // Resize buffers only if FFT size changed (avoid reallocation on every call)
-            if (m_batch_fft_size != fftSizePow2)
-            {
-                m_batch_fft_size = fftSizePow2;
-                size_t halfSize = fftSizePow2 / 2 + 1;
-
-                // Create/resize FFT engine
-                m_fft_engine = std::make_unique<core::FftEngine<float>>(fftSizePow2);
-
-                // Pre-allocate buffers
-                m_batch_kernel_padded.resize(fftSizePow2);
-                m_batch_kernel_fft.resize(halfSize);
-                m_batch_channel_data.resize(fftSizePow2);
-                m_batch_signal_fft.resize(halfSize);
-                m_batch_result.resize(fftSizePow2);
-
-                // Zero-pad kernel and compute FFT (only once per size)
-                std::fill(m_batch_kernel_padded.begin(), m_batch_kernel_padded.end(), 0.0f);
-                std::copy(m_kernel.begin(), m_kernel.end(), m_batch_kernel_padded.begin());
-                m_fft_engine->rfft(m_batch_kernel_padded.data(), m_batch_kernel_fft.data());
-            }
-
-            size_t halfSize = m_batch_fft_size / 2 + 1;
-
-            // Resize de-interleaved buffers if needed
-            if (m_deinterleaved_buffers.size() != static_cast<size_t>(numChannels))
-            {
-                m_deinterleaved_buffers.resize(numChannels);
-                for (auto &buf : m_deinterleaved_buffers)
-                {
-                    buf.resize(samplesPerChannel);
-                }
-            }
-            else if (!m_deinterleaved_buffers.empty() &&
-                     m_deinterleaved_buffers[0].size() != samplesPerChannel)
-            {
-                for (auto &buf : m_deinterleaved_buffers)
-                {
-                    buf.resize(samplesPerChannel);
-                }
-            }
-
-            // Resize output buffer
-            if (m_temp_output_channel.size() != samplesPerChannel)
-            {
-                m_temp_output_channel.resize(samplesPerChannel);
-            }
-
-            // Step 1: De-interleave all input data (improves cache locality)
-            for (int ch = 0; ch < numChannels; ++ch)
-            {
-                for (size_t i = 0; i < samplesPerChannel; ++i)
-                {
-                    m_deinterleaved_buffers[ch][i] = buffer[i * numChannels + ch];
-                }
-            }
-
-            // Step 2: Process each channel on contiguous memory
-            for (int ch = 0; ch < numChannels; ++ch)
-            {
-                // Zero-pad channel data using pre-allocated buffer
-                std::fill(m_batch_channel_data.begin(), m_batch_channel_data.end(), 0.0f);
-                std::copy(m_deinterleaved_buffers[ch].begin(),
-                          m_deinterleaved_buffers[ch].end(),
-                          m_batch_channel_data.begin());
-
-                // FFT of signal
-                m_fft_engine->rfft(m_batch_channel_data.data(), m_batch_signal_fft.data());
-
-                // Complex multiplication in frequency domain
-                for (size_t i = 0; i < halfSize; ++i)
-                {
-                    m_batch_signal_fft[i] *= m_batch_kernel_fft[i];
-                }
-
-                // IFFT to get convolution result
-                m_fft_engine->irfft(m_batch_signal_fft.data(), m_batch_result.data());
-
-                // Store in output buffer
-                for (size_t i = 0; i < samplesPerChannel; ++i)
-                {
-                    m_temp_output_channel[i] = m_batch_result[i];
-                }
-
-                // Step 3: Re-interleave output back to original buffer
-                for (size_t i = 0; i < samplesPerChannel; ++i)
-                {
-                    buffer[i * numChannels + ch] = m_temp_output_channel[i];
                 }
             }
         }

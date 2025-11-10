@@ -346,6 +346,37 @@ const output = await pipeline.process(input, {
 
 **Recommendation:** Use batched callbacks in production. Individual callbacks benchmark faster but block the Node.js event loop and can't integrate with real telemetry systems (Kafka, Datadog, Loki).
 
+### 🎯 FFT Performance Note
+
+**Pipeline vs Direct Processing:**
+
+The DSP pipeline adds ~0.3-0.4ms overhead per operation for:
+
+- Channel management and stage chaining
+- N-API boundary crossings
+- Output buffer allocation
+
+For **maximum FFT performance** (when you don't need multi-stage processing or Redis persistence), use the direct `FftProcessor`:
+
+```javascript
+// ⚡ FASTER: Direct FFT (no pipeline overhead)
+import { FftProcessor } from "dspx";
+const processor = new FftProcessor(1024);
+const output = processor.rfft(signal); // ~4-14x faster than fft.js
+
+// 🔧 FLEXIBLE: Pipeline FFT (with overhead)
+const pipeline = createDspPipeline();
+pipeline.fft({ size: 1024, type: "rfft" });
+const result = pipeline.process(signal); // Still faster than pure JS, but ~0.3ms overhead
+```
+
+**When to use each:**
+
+- **FftProcessor**: Single FFT operations, maximum speed, batch processing
+- **Pipeline**: Multi-stage processing (filter→FFT→analysis), Redis state, complex workflows
+
+With recent optimizations (loop unrolling, memcpy, single-channel fast paths), dspx FFT is now **4-14x faster than fft.js** across all sizes when measured correctly. See [FFT_BENCHMARK_FIX.md](docs/FFT_BENCHMARK_FIX.md) for benchmark methodology.
+
 ### ⚠️ ARM/Mobile Platform Notice
 
 **ARM NEON optimizations are experimental.** Mobile/ARM devices face unique challenges:
