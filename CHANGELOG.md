@@ -1,5 +1,11 @@
 # dspx
 
+## 1.1.1
+
+### Patch Changes
+
+- [`3afc644`](https://github.com/A-KGeorge/dspx/commit/3afc6449d4c144f5d2ca1ccbe570b371b28d0e8c) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - added tests, modified docs,
+
 ## 1.1.0
 
 ### Minor Changes
