@@ -1,5 +1,11 @@
 # dspx
 
+## 1.1.6
+
+### Patch Changes
+
+- [`f9c5459`](https://github.com/A-KGeorge/dspx/commit/f9c545967ca016ad5c9ff1daf99188616935c04f) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Fixed convolution batch mode
+
 ## 1.1.5
 
 ### Patch Changes
