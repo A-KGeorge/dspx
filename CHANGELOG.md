@@ -1,5 +1,11 @@
 # dspx
 
+## 1.2.0
+
+### Minor Changes
+
+- [`a62bd5a`](https://github.com/A-KGeorge/dspx/commit/a62bd5a1aa3f55fe08eeb71d2714bce9b59107d0) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - added domain and mode fields for peak detection
+
 ## 1.1.6
 
 ### Patch Changes
