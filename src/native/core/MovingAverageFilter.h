@@ -112,7 +112,7 @@ namespace dsp::core
          * @brief Gets the current moving average.
          * @return T The average of the samples currently in the buffer.
          */
-        T getAverage() const { return m_filter.getPolicy().getResult(m_filter.getBufferContents()); }
+        T getAverage() const { return m_filter.getPolicy().getResult(m_filter.getCount()); }
 
         /**
          * @brief Clears all samples from the filter and resets the sum.

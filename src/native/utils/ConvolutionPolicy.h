@@ -95,14 +95,14 @@ namespace dsp::utils
          * @param buffer The window buffer contents.
          * @return The convolution result (computed in ConvolutionStage).
          */
-        T getResult(const std::vector<T> &buffer) const
+        T getResult(size_t count) const
         {
             // This is called by SlidingWindowFilter::addSample()
             // But for convolution, we compute the result using calculate()
             // with the full window contents. The actual computation happens
             // in ConvolutionStage which calls calculate() directly.
             // Return 0 here as placeholder - the real result comes from calculate().
-            (void)buffer; // Suppress unused parameter warning
+            (void)count; // Suppress unused parameter warning
             return T(0);
         }
 

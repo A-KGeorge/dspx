@@ -1,8 +1,64 @@
 #include "SlidingWindowFilter.h"
 #include "ConvolutionPolicy.h"
 #include "../core/Policies.h"
+#include <type_traits>
 
 using namespace dsp::utils;
+
+// Helper to detect if Policy has getResult(const std::vector<T>&)
+template <typename T, typename Policy>
+struct has_getResult_vector
+{
+    template <typename P>
+    static constexpr auto check(P *) -> decltype(std::declval<P>().getResult(std::declval<const std::vector<T> &>()), std::true_type{}) { return {}; }
+    static constexpr std::false_type check(...) { return {}; }
+    static constexpr bool value = decltype(check(static_cast<Policy *>(nullptr)))::value;
+};
+
+// Helper to detect if Policy has getResult(size_t)
+template <typename T, typename Policy>
+struct has_getResult_count
+{
+    template <typename P>
+    static constexpr auto check(P *) -> decltype(std::declval<P>().getResult(std::declval<size_t>()), std::true_type{}) { return {}; }
+    static constexpr std::false_type check(...) { return {}; }
+    static constexpr bool value = decltype(check(static_cast<Policy *>(nullptr)))::value;
+};
+
+// Helper to detect if Policy has getResult(T, size_t) - for ZScorePolicy
+template <typename T, typename Policy>
+struct has_getResult_value_count
+{
+    template <typename P>
+    static constexpr auto check(P *) -> decltype(std::declval<P>().getResult(std::declval<T>(), std::declval<size_t>()), std::true_type{}) { return {}; }
+    static constexpr std::false_type check(...) { return {}; }
+    static constexpr bool value = decltype(check(static_cast<Policy *>(nullptr)))::value;
+};
+
+// Call the appropriate getResult based on what the policy supports
+template <typename T, typename Policy>
+T call_getResult(const Policy &policy, size_t count, const std::vector<T> &buffer)
+{
+    if constexpr (has_getResult_vector<T, Policy>::value)
+    {
+        return policy.getResult(buffer);
+    }
+    else if constexpr (has_getResult_value_count<T, Policy>::value)
+    {
+        // For ZScorePolicy, we need the current value (last in buffer) and count
+        if (buffer.empty())
+            return T(0);
+        return policy.getResult(buffer.back(), count);
+    }
+    else if constexpr (has_getResult_count<T, Policy>::value)
+    {
+        return policy.getResult(count);
+    }
+    else
+    {
+        static_assert(sizeof(Policy) == 0, "Policy must have getResult(size_t), getResult(T, size_t), or getResult(const std::vector<T>&)");
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Constructor
@@ -51,7 +107,7 @@ T SlidingWindowFilter<T, Policy>::addSample(T newValue)
     m_buffer.pushOverwrite(newValue);
     m_policy.onAdd(newValue);
 
-    return m_policy.getResult(m_buffer.toVector());
+    return call_getResult<T, Policy>(m_policy, m_buffer.getCount(), m_buffer.toVector());
 }
 
 // -----------------------------------------------------------------------------
@@ -103,7 +159,7 @@ T SlidingWindowFilter<T, Policy>::addSampleWithTimestamp(T newValue, double time
     m_buffer.pushOverwriteWithTimestamp(newValue, timestamp);
     m_policy.onAdd(newValue);
 
-    return m_policy.getResult(m_buffer.toVector());
+    return call_getResult<T, Policy>(m_policy, m_buffer.getCount(), m_buffer.toVector());
 }
 
 // -----------------------------------------------------------------------------

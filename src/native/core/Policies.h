@@ -19,9 +19,8 @@ namespace dsp::core
         void onRemove(T val) { m_sum -= val; }
         void clear() { m_sum = 0; }
 
-        T getResult(const std::vector<T> &buffer) const
+        T getResult(size_t count) const
         {
-            size_t count = buffer.size();
             if (count == 0)
                 return 0;
             return m_sum / static_cast<T>(count);
@@ -46,9 +45,8 @@ namespace dsp::core
         void onRemove(T val) { m_sum_sq -= (val * val); }
         void clear() { m_sum_sq = 0; }
 
-        T getResult(const std::vector<T> &buffer) const
+        T getResult(size_t count) const
         {
-            size_t count = buffer.size();
             if (count == 0)
                 return 0;
             // Clamp to avoid negative values due to floating-point errors
@@ -85,7 +83,7 @@ namespace dsp::core
             m_sum = 0.0;
         }
 
-        T getResult(const std::vector<T> &buffer) const
+        T getResult(size_t count) const
         {
             // The result is just the total sum
             return static_cast<T>(m_sum);
@@ -140,7 +138,7 @@ namespace dsp::core
         }
 
         // Note: The process buffer is float, so we cast the count
-        float getResult(const std::vector<bool> &buffer) const
+        float getResult(size_t count) const
         {
             return static_cast<float>(m_count);
         }
@@ -183,9 +181,8 @@ namespace dsp::core
         void onRemove(T val) { m_sum_abs -= std::abs(val); }
         void clear() { m_sum_abs = 0; }
 
-        T getResult(const std::vector<T> &buffer) const
+        T getResult(size_t count) const
         {
-            size_t count = buffer.size();
             if (count == 0)
                 return 0;
             return m_sum_abs / static_cast<T>(count);
@@ -226,9 +223,8 @@ namespace dsp::core
             m_sum_sq = 0;
         }
 
-        T getResult(const std::vector<T> &buffer) const
+        T getResult(size_t count) const
         {
-            size_t count = buffer.size();
             if (count == 0)
                 return 0;
 
@@ -447,18 +443,15 @@ namespace dsp::core
 
         // Compute convolution (dot product) with the buffer
         // Note: This is a simple scalar version; SIMD is applied in FirFilter
-        T getResult(const std::vector<T> &buffer) const
+        T getResult(size_t count) const
         {
-            if (buffer.empty() || m_coefficients.empty())
-                return T(0);
-
-            T result = T(0);
-            size_t len = std::min(buffer.size(), m_coefficients.size());
-            for (size_t i = 0; i < len; ++i)
-            {
-                result += buffer[i] * m_coefficients[i];
-            }
-            return result;
+            // This is called by SlidingWindowFilter::addSample()
+            // But for convolution, we compute the result using calculate()
+            // with the full window contents. The actual computation happens
+            // in ConvolutionStage which calls calculate() directly.
+            // Return 0 here as placeholder - the real result comes from calculate().
+            (void)count; // Suppress unused parameter warning
+            return T(0);
         }
 
         // For state serialization
