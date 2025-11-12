@@ -1052,6 +1052,35 @@ export interface PeakDetectionParams {
    * Example: 0.5 detects peaks above 50% amplitude.
    */
   threshold: number;
+  /**
+   * Processing mode
+   * - 'batch': Stateless, processes each chunk independently
+   * - 'moving': Stateful, maintains state across chunks for continuity
+   * Default: 'batch'
+   */
+  mode?: "batch" | "moving";
+
+  /**
+   * Domain for peak detection
+   * - 'time': Detect peaks in time domain signal (default)
+   * - 'frequency': Detect peaks in frequency domain magnitude spectrum
+   * Default: 'time'
+   */
+  domain?: "time" | "frequency";
+
+  /**
+   * Window size in samples for 'moving' mode
+   * Required for 'moving' mode in time domain
+   */
+  windowSize?: number;
+
+  /**
+   * Minimum distance between peaks in samples (default: 1, optional)
+   * Prevents detecting multiple peaks that are too close together.
+   * Example: 100 ensures at least 100 samples between detected peaks.
+   *
+   */
+  minPeakDistance?: number;
 }
 
 /**

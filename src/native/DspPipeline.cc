@@ -875,16 +875,44 @@ namespace dsp
         // ===================================================================
         // Peak Detection Stage
         // ===================================================================
+
         m_stageFactories["peakDetection"] = [](const Napi::Object &params)
         {
             if (!params.Has("threshold"))
             {
-                throw std::invalid_argument("PeakDetection: requires 'threshold' parameter");
+                throw std::invalid_argument("PeakDetection: 'threshold' is required");
             }
-
             float threshold = params.Get("threshold").As<Napi::Number>().FloatValue();
 
-            return std::make_unique<dsp::adapters::PeakDetectionStage>(threshold);
+            // Parse mode (default: moving)
+            auto mode = dsp::adapters::PeakDetectionStage::Mode::Moving;
+            if (params.Has("mode"))
+            {
+                std::string modeStr = params.Get("mode").As<Napi::String>().Utf8Value();
+                mode = (modeStr == "batch")
+                           ? dsp::adapters::PeakDetectionStage::Mode::Batch
+                           : dsp::adapters::PeakDetectionStage::Mode::Moving;
+            }
+
+            // Parse domain (default: time)
+            auto domain = dsp::adapters::PeakDetectionStage::Domain::Time;
+            if (params.Has("domain"))
+            {
+                std::string domainStr = params.Get("domain").As<Napi::String>().Utf8Value();
+                domain = (domainStr == "frequency")
+                             ? dsp::adapters::PeakDetectionStage::Domain::Frequency
+                             : dsp::adapters::PeakDetectionStage::Domain::Time;
+            }
+
+            // Parse optional minPeakDistance (default: 1)
+            size_t minPeakDistance = 1;
+            if (params.Has("minPeakDistance"))
+            {
+                minPeakDistance = params.Get("minPeakDistance").As<Napi::Number>().Uint32Value();
+            }
+
+            return std::make_unique<dsp::adapters::PeakDetectionStage>(
+                threshold, mode, domain, minPeakDistance);
         };
 
         // ===================================================================

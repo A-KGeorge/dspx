@@ -81,7 +81,7 @@ namespace dsp::core
          * @brief Gets the current RMS value.
          * @return T The RMS of the samples currently in the buffer.
          */
-        T getRms() const { return m_filter.getPolicy().getResult(m_filter.getCount()); }
+        T getRms() const { return m_filter.getPolicy().getResult(m_filter.getBufferContents()); }
 
         /**
          * @brief Clears all samples from the filter and resets the sum.

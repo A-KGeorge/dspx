@@ -51,7 +51,7 @@ T SlidingWindowFilter<T, Policy>::addSample(T newValue)
     m_buffer.pushOverwrite(newValue);
     m_policy.onAdd(newValue);
 
-    return m_policy.getResult(m_buffer.getCount());
+    return m_policy.getResult(m_buffer.toVector());
 }
 
 // -----------------------------------------------------------------------------
@@ -103,7 +103,7 @@ T SlidingWindowFilter<T, Policy>::addSampleWithTimestamp(T newValue, double time
     m_buffer.pushOverwriteWithTimestamp(newValue, timestamp);
     m_policy.onAdd(newValue);
 
-    return m_policy.getResult(m_buffer.getCount());
+    return m_policy.getResult(m_buffer.toVector());
 }
 
 // -----------------------------------------------------------------------------
@@ -230,6 +230,10 @@ namespace dsp::utils
     // Note: ZScorePolicy is NOT instantiated here because it has a different interface
     // (getResult takes 2 parameters: currentValue and count, not just count)
     // MovingZScoreFilter doesn't use SlidingWindowFilter template
+    // Same goes for FrequencyPeakPolicy, since it isn't meant to be used with SlidingWindowFilter
+
+    template class SlidingWindowFilter<float, dsp::core::PeakDetectionPolicy<float>>;
+    template class SlidingWindowFilter<double, dsp::core::PeakDetectionPolicy<double>>;
 
     // WaveformLengthFilter instantiations
     template class dsp::utils::SlidingWindowFilter<float, SumPolicy<float>>;

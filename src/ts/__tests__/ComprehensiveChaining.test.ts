@@ -427,7 +427,12 @@ describe("Comprehensive DSP Pipeline Chaining", () => {
           windowSize: 20,
           output: "residuals",
         })
-        .PeakDetection({ threshold: 0.5 });
+        .PeakDetection({
+          threshold: 0.5,
+          mode: "moving",
+          domain: "time",
+          windowSize: 3,
+        });
 
       const samples = 100;
       const signal = new Float32Array(samples);

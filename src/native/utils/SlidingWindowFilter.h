@@ -16,7 +16,7 @@ namespace dsp::utils
      *
      * @tparam T The numeric type (e.g., float, double).
      * @tparam Policy The struct that defines the state and math operations.
-     *               Must implement: onAdd(T), onRemove(T), clear(), getResult(size_t)
+     *               Must implement: onAdd(T), onRemove(T), clear(), getResult(const std::vector<T>&)
      */
     template <typename T, typename Policy>
     class SlidingWindowFilter

@@ -1604,26 +1604,69 @@ class DspProcessor {
    *
    * @param params - Peak detection parameters
    * @param params.threshold - Minimum peak amplitude (must be >= 0)
+   * @param params.mode - 'batch' (default) or 'moving' mode for real-time
+   * @param params.domain - 'time' (default) or 'frequency' domain processing
+   * @param params.windowSize - Window size for 'moving' mode (required)
+   * @param params.minPeakDistance - Minimum samples between peaks (optional, default: 1)
    * @returns this instance for method chaining
    *
    * @throws {TypeError} If threshold is missing or invalid
    * @throws {RangeError} If threshold < 0
    *
    * @example
-   * // Detect R-peaks in ECG above 0.5mV
-   * pipeline.PeakDetection({ threshold: 0.5 });
+   * // Time domain: ECG R-peak detection (moving mode)
+   * pipeline.PeakDetection({
+   *   threshold: 0.7,
+   *   mode: "moving",
+   *   domain: "time",
+   *   windowSize: 3,
+   * });
    *
    * @example
-   * // Find all local maxima (no amplitude threshold)
-   * pipeline.PeakDetection({ threshold: 0.0 });
+   * // Frequency domain: Find dominant frequencies
+   * pipeline
+   *   .fft({ size: 1024, output: "magnitude" })
+   *   .PeakDetection({
+   *     threshold: 0.1,
+   *     domain: "frequency",
+   *     minPeakDistance: 5  // At least 5 bins apart
+   *   });
+   *
+   * @example
+   * // Batch mode: Process independent chunks
+   * pipeline.PeakDetection({
+   *   threshold: 0.5,
+   *   mode: "batch",
+   *   domain: "time",
+   *   windowSize: 3,
+   * });
    */
   PeakDetection(params: PeakDetectionParams): this {
     if (typeof params.threshold !== "number" || params.threshold < 0) {
       throw new RangeError("PeakDetection: threshold must be >= 0");
     }
 
-    this.nativeInstance.addStage("peakDetection", params);
-    this.stages.push(`peakDetection:${params.threshold}`);
+    const mode = params.mode || "moving";
+    const domain = params.domain || "time";
+
+    if (mode !== "batch" && mode !== "moving") {
+      throw new TypeError("PeakDetection: mode must be 'batch' or 'moving'");
+    }
+
+    if (domain !== "time" && domain !== "frequency") {
+      throw new TypeError(
+        "PeakDetection: domain must be 'time' or 'frequency'"
+      );
+    }
+
+    this.nativeInstance.addStage("peakDetection", {
+      threshold: params.threshold,
+      mode,
+      domain,
+      minPeakDistance: params.minPeakDistance || 1,
+    });
+
+    this.stages.push(`peakDetection:${mode}:${domain}:${params.threshold}`);
     return this;
   }
 

@@ -19,8 +19,9 @@ namespace dsp::core
         void onRemove(T val) { m_sum -= val; }
         void clear() { m_sum = 0; }
 
-        T getResult(size_t count) const
+        T getResult(const std::vector<T> &buffer) const
         {
+            size_t count = buffer.size();
             if (count == 0)
                 return 0;
             return m_sum / static_cast<T>(count);
@@ -45,8 +46,9 @@ namespace dsp::core
         void onRemove(T val) { m_sum_sq -= (val * val); }
         void clear() { m_sum_sq = 0; }
 
-        T getResult(size_t count) const
+        T getResult(const std::vector<T> &buffer) const
         {
+            size_t count = buffer.size();
             if (count == 0)
                 return 0;
             // Clamp to avoid negative values due to floating-point errors
@@ -83,7 +85,7 @@ namespace dsp::core
             m_sum = 0.0;
         }
 
-        T getResult(size_t count) const
+        T getResult(const std::vector<T> &buffer) const
         {
             // The result is just the total sum
             return static_cast<T>(m_sum);
@@ -138,7 +140,7 @@ namespace dsp::core
         }
 
         // Note: The process buffer is float, so we cast the count
-        float getResult(size_t count) const
+        float getResult(const std::vector<bool> &buffer) const
         {
             return static_cast<float>(m_count);
         }
@@ -181,8 +183,9 @@ namespace dsp::core
         void onRemove(T val) { m_sum_abs -= std::abs(val); }
         void clear() { m_sum_abs = 0; }
 
-        T getResult(size_t count) const
+        T getResult(const std::vector<T> &buffer) const
         {
+            size_t count = buffer.size();
             if (count == 0)
                 return 0;
             return m_sum_abs / static_cast<T>(count);
@@ -223,8 +226,9 @@ namespace dsp::core
             m_sum_sq = 0;
         }
 
-        T getResult(size_t count) const
+        T getResult(const std::vector<T> &buffer) const
         {
+            size_t count = buffer.size();
             if (count == 0)
                 return 0;
 
@@ -307,6 +311,119 @@ namespace dsp::core
         }
 
         T getEpsilon() const { return m_epsilon; }
+    };
+
+    /**
+     * @brief Policy for peak detection in Time domain.
+     *
+     * Detects local maxima using three-point comparison with the sliding window.
+     * Window size is typically 3 (current + 2 previous samples).
+     *
+     */
+    template <typename T>
+    struct PeakDetectionPolicy
+    {
+        T m_threshold;
+
+        explicit PeakDetectionPolicy(T threshold = T(0))
+            : m_threshold(threshold) {}
+
+        void onAdd(T val) { /* No incremental update needed */ }
+        void onRemove(T val) { /* No incremental update needed */ }
+        void clear() { /* No state to clear */ }
+
+        /**
+         * @brief Check if the middle sample in the window is a peak.
+         * Requires exactly 3 samples in the buffer: [oldest, middle, newest]
+         * Peak condition: oldest < middle > newest && middle >= threshold
+         */
+        T getResult(const std::vector<T> &buffer) const
+        {
+            if (buffer.size() < 3)
+                return T(0);
+
+            // Buffer is in chronological order: [oldest, middle, newest]
+            T oldest = buffer[0];
+            T middle = buffer[1];
+            T newest = buffer[2];
+
+            bool isPeak = (middle > oldest) && (middle > newest) && (middle >= m_threshold);
+            return isPeak ? T(1) : T(0);
+        }
+
+        // For state serialization (threshold is constant)
+        T getState() const { return m_threshold; }
+        void setState(T threshold) { m_threshold = threshold; }
+        T getThreshold() const { return m_threshold; }
+    };
+
+    /**
+     * @brief Policy for peak detection in frequency domain.
+     *
+     * Used for batch operations on entire spectrum.
+     * Not meant for use with SlidingWindowFilter.
+     */
+    template <typename T>
+    struct FrequencyPeakPolicy
+    {
+        T m_threshold;
+        size_t m_minPeakDistance;
+
+        explicit FrequencyPeakPolicy(T threshold = T(0), size_t minPeakDistance = 1)
+            : m_threshold(threshold), m_minPeakDistance(minPeakDistance) {}
+
+        /**
+         * @brief Detect peaks in frequency domain (batch operation).
+         * Returns indices of spectral peaks above threshold.
+         */
+        std::vector<size_t> detectPeaks(const T *data, size_t length) const
+        {
+            std::vector<size_t> peakIndices;
+
+            if (length < 3)
+                return peakIndices;
+
+            // Find local maxima in spectrum
+            for (size_t i = 1; i < length - 1; ++i)
+            {
+                if (data[i] > data[i - 1] && data[i] > data[i + 1] && data[i] >= m_threshold)
+                {
+                    // Check minimum peak distance constraint
+                    bool tooClose = false;
+                    for (size_t peakIdx : peakIndices)
+                    {
+                        if (std::abs(static_cast<int>(i) - static_cast<int>(peakIdx)) < static_cast<int>(m_minPeakDistance))
+                        {
+                            // Keep the higher peak
+                            if (data[i] > data[peakIdx])
+                            {
+                                peakIndices.erase(std::remove(peakIndices.begin(), peakIndices.end(), peakIdx), peakIndices.end());
+                            }
+                            else
+                            {
+                                tooClose = true;
+                            }
+                            break;
+                        }
+                    }
+
+                    if (!tooClose)
+                    {
+                        peakIndices.push_back(i);
+                    }
+                }
+            }
+
+            return peakIndices;
+        }
+
+        // For state serialization
+        std::pair<T, size_t> getState() const { return {m_threshold, m_minPeakDistance}; }
+        void setState(T threshold, size_t minDist)
+        {
+            m_threshold = threshold;
+            m_minPeakDistance = minDist;
+        }
     };
 
     /**

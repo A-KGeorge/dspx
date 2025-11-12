@@ -84,7 +84,7 @@ namespace dsp::core
          * @brief Gets the current mean absolute value.
          * @return T The MAV of the samples currently in the buffer.
          */
-        T getMav() const { return m_filter.getPolicy().getResult(m_filter.getCount()); }
+        T getMav() const { return m_filter.getPolicy().getResult(m_filter.getBufferContents()); }
 
         /**
          * @brief Clears all samples from the filter and resets the sum.
