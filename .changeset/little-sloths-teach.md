@@ -1,5 +1,0 @@
----
-"dspx": patch
----
-
-fixed performance
