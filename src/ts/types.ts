@@ -1052,6 +1052,29 @@ export interface PeakDetectionParams {
    * Example: 0.5 detects peaks above 50% amplitude.
    */
   threshold: number;
+  /** * Processing mode:
+   * - 'moving' (default): Stateful, detects peaks across buffer boundaries.
+   * - 'batch': Stateless, detects peaks only within the current buffer.
+   */
+  mode?: "moving" | "batch";
+  /** * Signal domain:
+   * - 'time' (default): Operates on a time-series signal.
+   * - 'frequency': Operates on a frequency spectrum.
+   */
+  domain?: "time" | "frequency";
+  /**
+   * The number of samples in the local neighborhood to check.
+   * Must be an odd number >= 3. (e.g., 3, 5, 7).
+   * Default: 3.
+   * @note In 'moving' mode, this is locked to 3. It is only flexible in 'batch' mode.
+   * @note The highly optimized SIMD implementation is used only for `windowSize = 3`. Other sizes will use a slower scalar implementation.
+   */
+  windowSize?: number;
+  /**
+   * The minimum number of samples between two consecutive peaks.
+   * Default: 1 (all peaks are kept).
+   */
+  minPeakDistance?: number;
 }
 
 /**

@@ -1592,9 +1592,16 @@ class DspProcessor {
   /**
    * Detect peaks (local maxima) in the input stream.
    *
-   * Identifies peaks using three-point comparison: a peak is detected when
-   * the previous sample is greater than both its neighbors AND exceeds
-   * the threshold. Outputs 1.0 at peak locations, 0.0 elsewhere.
+   * Identifies peaks using a local window comparison. A peak is detected if
+   * it's the maximum value within its `windowSize` and exceeds the `threshold`.
+   *
+   * **Modes:**
+   * - `moving` (default): Stateful. Detects peaks across buffer boundaries.
+   * - `batch`: Stateless. Detects peaks only within the current buffer.
+   *
+   * **Domains:**
+   * - `time` (default): Operates on time-series data.
+   * - `frequency`: Operates on frequency-domain data (e.g., spectrum).
    *
    * **Use Cases:**
    * - Heart rate detection (R-peaks in ECG)
@@ -1603,27 +1610,93 @@ class DspProcessor {
    * - Spike detection in neural recordings
    *
    * @param params - Peak detection parameters
-   * @param params.threshold - Minimum peak amplitude (must be >= 0)
+   * @param params.threshold - Minimum peak amplitude (must be >= 0). **Required**.
+   * @param params.mode - 'moving' or 'batch'. Default: 'moving'.
+   * @param params.domain - 'time' or 'frequency'. Default: 'time'.
+   * @param params.windowSize - Local neighborhood size (must be odd, >= 3). Default: 3.
+   * - The optimized SIMD path is used for `windowSize = 3` in 'batch' mode.
+   * - Other sizes (5, 7, ...) use a slower scalar implementation.
+   * - **Note**: `moving` mode only supports `windowSize = 3`.
+   * @param params.minPeakDistance - Minimum number of samples between peaks. Default: 1.
    * @returns this instance for method chaining
    *
-   * @throws {TypeError} If threshold is missing or invalid
-   * @throws {RangeError} If threshold < 0
+   * @throws {RangeError} If threshold < 0, windowSize is invalid, or minPeakDistance < 1.
+   * @throws {TypeError} If mode or domain is invalid.
    *
    * @example
-   * // Detect R-peaks in ECG above 0.5mV
-   * pipeline.PeakDetection({ threshold: 0.5 });
+   * // Detect R-peaks in ECG above 0.5mV, at least 200 samples apart
+   * pipeline.PeakDetection({
+   * threshold: 0.5,
+   * mode: 'moving',
+   * minPeakDistance: 200
+   * });
    *
    * @example
-   * // Find all local maxima (no amplitude threshold)
-   * pipeline.PeakDetection({ threshold: 0.0 });
+   * // Find all local maxima in a 'batch' with a 5-sample window
+   * pipeline.PeakDetection({
+   * threshold: 0.0,
+   * mode: 'batch',
+   * windowSize: 5,
+   * minPeakDistance: 1
+   * });
    */
   PeakDetection(params: PeakDetectionParams): this {
+    // Required param
     if (typeof params.threshold !== "number" || params.threshold < 0) {
       throw new RangeError("PeakDetection: threshold must be >= 0");
     }
 
-    this.nativeInstance.addStage("peakDetection", params);
-    this.stages.push(`peakDetection:${params.threshold}`);
+    // Defaulted params
+    const mode = params.mode ?? "moving";
+    const domain = params.domain ?? "time";
+    const windowSize = params.windowSize ?? 3;
+    const minPeakDistance = params.minPeakDistance ?? 1;
+
+    // Validation for new params
+    if (mode !== "moving" && mode !== "batch") {
+      throw new TypeError(
+        `PeakDetection: mode must be 'moving' or 'batch', got '${mode}'`
+      );
+    }
+    if (domain !== "time" && domain !== "frequency") {
+      throw new TypeError(
+        `PeakDetection: domain must be 'time' or 'frequency', got '${domain}'`
+      );
+    }
+    if (
+      windowSize < 3 ||
+      !Number.isInteger(windowSize) ||
+      windowSize % 2 === 0
+    ) {
+      throw new RangeError(
+        `PeakDetection: windowSize must be an odd integer >= 3, got ${windowSize}`
+      );
+    }
+    if (minPeakDistance < 1 || !Number.isInteger(minPeakDistance)) {
+      throw new RangeError(
+        `PeakDetection: minPeakDistance must be an integer >= 1, got ${minPeakDistance}`
+      );
+    }
+
+    // Note: The C++ adapter will automatically force windowSize = 3 if mode = 'moving'
+    if (mode === "moving" && windowSize !== 3) {
+      console.warn(
+        `PeakDetection: 'moving' mode only supports windowSize = 3. Defaulting to 3.`
+      );
+    }
+
+    const stageParams = {
+      threshold: params.threshold,
+      mode,
+      domain,
+      windowSize,
+      minPeakDistance,
+    };
+
+    this.nativeInstance.addStage("peakDetection", stageParams);
+    this.stages.push(
+      `peakDetection:${mode}:t=${params.threshold}:w=${windowSize}:d=${minPeakDistance}`
+    );
     return this;
   }
 

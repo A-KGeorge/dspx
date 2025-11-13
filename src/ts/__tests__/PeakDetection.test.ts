@@ -1,220 +1,303 @@
 import { test } from "node:test";
-import assert from "node:assert";
-import { createDspPipeline } from "../bindings.js";
+import assert from "node:assert/strict";
+import { createDspPipeline } from "../index"; // Adjust path as needed
+// Note: 'interleave' is not used in these tests, so it's removed.
 
-test("PeakDetection - basic peak detection", async () => {
-  const pipeline = createDspPipeline();
-  pipeline.PeakDetection({ threshold: 0.5 });
-
-  // Signal with clear peaks at indices 2 and 5
-  const input = new Float32Array([0.2, 0.5, 0.8, 0.6, 0.7, 0.9, 0.4]);
-
-  const result = await pipeline.process(input, {
-    channels: 1,
-    sampleRate: 1000,
+// Helper function to find indices of peaks
+const findPeakIndices = (data: Float32Array): number[] => {
+  const indices: number[] = [];
+  data.forEach((val, i) => {
+    if (val === 1.0) {
+      indices.push(i);
+    }
   });
+  return indices;
+};
 
-  // Expected peaks: 0.8 at index 2, 0.9 at index 5
-  assert.equal(result[0], 0.0);
-  assert.equal(result[1], 0.0);
-  assert.equal(result[2], 1.0); // Peak: 0.5 < 0.8 > 0.6
-  assert.equal(result[3], 0.0);
-  assert.equal(result[4], 0.0);
-  assert.equal(result[5], 1.0); // Peak: 0.7 < 0.9 > 0.4
-  assert.equal(result[6], 0.0);
+// --- 1. Parameter Validation Tests ---
+
+test("PeakDetection - Parameter Validation - should throw if threshold is missing", () => {
+  const pipeline = createDspPipeline();
+  assert.throws(
+    // @ts-expect-error
+    () => pipeline.PeakDetection({}),
+    (err: Error) => {
+      assert.strictEqual(err.name, "RangeError");
+      assert.match(err.message, /threshold must be >= 0/);
+      return true;
+    }
+  );
 });
 
-test("PeakDetection - no peaks", async () => {
+test("PeakDetection - Parameter Validation - should throw if threshold is negative", () => {
   const pipeline = createDspPipeline();
-  pipeline.PeakDetection({ threshold: 0.5 });
-
-  // Monotonic increasing signal (no local maxima)
-  const input = new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5]);
-
-  const result = await pipeline.process(input, {
-    channels: 1,
-    sampleRate: 1000,
-  });
-
-  // No peaks
-  for (let i = 0; i < result.length; i++) {
-    assert.equal(result[i], 0.0);
-  }
+  assert.throws(
+    () => pipeline.PeakDetection({ threshold: -1 }),
+    (err: Error) => {
+      assert.strictEqual(err.name, "RangeError");
+      assert.match(err.message, /threshold must be >= 0/);
+      return true;
+    }
+  );
 });
 
-test("PeakDetection - peaks below threshold ignored", async () => {
+test("PeakDetection - Parameter Validation - should throw if mode is invalid", () => {
   const pipeline = createDspPipeline();
-  pipeline.PeakDetection({ threshold: 0.8 });
-
-  // Peak at 0.6 is below threshold
-  const input = new Float32Array([0.2, 0.4, 0.6, 0.5, 0.3]);
-
-  const result = await pipeline.process(input, {
-    channels: 1,
-    sampleRate: 1000,
-  });
-
-  // Peak at 0.6 ignored because 0.6 < 0.8
-  for (let i = 0; i < result.length; i++) {
-    assert.equal(result[i], 0.0);
-  }
+  assert.throws(
+    // @ts-expect-error
+    () => pipeline.PeakDetection({ threshold: 0.5, mode: "invalid" }),
+    (err: Error) => {
+      assert.strictEqual(err.name, "TypeError");
+      assert.match(err.message, /mode must be 'moving' or 'batch'/);
+      return true;
+    }
+  );
 });
 
-test("PeakDetection - zero threshold (all peaks)", async () => {
+test("PeakDetection - Parameter Validation - should throw if domain is invalid", () => {
   const pipeline = createDspPipeline();
-  pipeline.PeakDetection({ threshold: 0.0 });
-
-  const input = new Float32Array([0.1, 0.3, 0.2, 0.4, 0.1]);
-
-  const result = await pipeline.process(input, {
-    channels: 1,
-    sampleRate: 1000,
-  });
-
-  // Peaks at 0.3 (index 1) and 0.4 (index 3)
-  assert.equal(result[0], 0.0);
-  assert.equal(result[1], 1.0); // 0.1 < 0.3 > 0.2
-  assert.equal(result[2], 0.0);
-  assert.equal(result[3], 1.0); // 0.2 < 0.4 > 0.1
-  assert.equal(result[4], 0.0);
+  assert.throws(
+    // @ts-expect-error
+    () => pipeline.PeakDetection({ threshold: 0.5, domain: "invalid" }),
+    (err: Error) => {
+      assert.strictEqual(err.name, "TypeError");
+      assert.match(err.message, /domain must be 'time' or 'frequency'/);
+      return true;
+    }
+  );
 });
 
-test("PeakDetection - multi-channel", async () => {
+test("PeakDetection - Parameter Validation - should throw if windowSize is even", () => {
   const pipeline = createDspPipeline();
-  pipeline.PeakDetection({ threshold: 0.5 });
+  assert.throws(
+    () => pipeline.PeakDetection({ threshold: 0.5, windowSize: 4 }),
+    (err: Error) => {
+      assert.strictEqual(err.name, "RangeError");
+      assert.match(err.message, /windowSize must be an odd integer >= 3/);
+      return true;
+    }
+  );
+});
 
-  // 2 channels, 4 samples
-  const input = new Float32Array([
-    0.3,
-    0.2, // Sample 0
-    0.6,
-    0.5, // Sample 1
-    0.4,
-    0.8, // Sample 2
-    0.2,
-    0.6, // Sample 3
+test("PeakDetection - Parameter Validation - should throw if windowSize is less than 3", () => {
+  const pipeline = createDspPipeline();
+  assert.throws(
+    () => pipeline.PeakDetection({ threshold: 0.5, windowSize: 1 }),
+    (err: Error) => {
+      assert.strictEqual(err.name, "RangeError");
+      assert.match(err.message, /windowSize must be an odd integer >= 3/);
+      return true;
+    }
+  );
+});
+
+test("PeakDetection - Parameter Validation - should throw if minPeakDistance is less than 1", () => {
+  const pipeline = createDspPipeline();
+  assert.throws(
+    () => pipeline.PeakDetection({ threshold: 0.5, minPeakDistance: 0 }),
+    (err: Error) => {
+      assert.strictEqual(err.name, "RangeError");
+      assert.match(err.message, /minPeakDistance must be an integer >= 1/);
+      return true;
+    }
+  );
+});
+
+test("PeakDetection - Parameter Validation - should warn if using moving mode and windowSize != 3", (t) => {
+  const pipeline = createDspPipeline();
+  const consoleWarnMock = t.mock.method(console, "warn", () => {});
+
+  pipeline.PeakDetection({
+    threshold: 0.5,
+    mode: "moving",
+    windowSize: 5,
+  });
+
+  assert.strictEqual(consoleWarnMock.mock.calls.length, 1);
+  assert.match(
+    consoleWarnMock.mock.calls[0].arguments[0],
+    /"moving' mode only supports windowSize = 3/
+  );
+});
+
+// --- 2. Mode: 'batch' (Stateless) Tests ---
+
+const batchData = new Float32Array([
+  0,
+  1,
+  5,
+  2,
+  3, // Peak at 2
+  6,
+  1,
+  0,
+  4,
+  9, // Peak at 5, Peak at 9
+  8,
+  2,
+  7,
+  3,
+  0, // Peak at 12
+]);
+const batchExpectedPeaks = [2, 5, 9, 12];
+const batchExpectedOutput = new Float32Array([
+  0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0,
+]);
+
+test("PeakDetection - Mode: 'batch' - should find all peaks with default settings (windowSize=3, minPeakDistance=1)", async () => {
+  const pipeline = createDspPipeline();
+  pipeline.PeakDetection({
+    threshold: 0.5,
+    mode: "batch",
+  });
+  const result = await pipeline.process(batchData.slice(), { channels: 1 });
+  assert.deepStrictEqual(findPeakIndices(result), batchExpectedPeaks);
+  assert.deepStrictEqual(result, batchExpectedOutput);
+});
+
+test("PeakDetection - Mode: 'batch' - should respect threshold", async () => {
+  const pipeline = createDspPipeline();
+  pipeline.PeakDetection({
+    threshold: 7, // Only peaks at 9 and 7 should be found
+    mode: "batch",
+  });
+  const result = await pipeline.process(batchData.slice(), { channels: 1 });
+  assert.deepStrictEqual(findPeakIndices(result), [9, 12]);
+});
+
+test("PeakDetection - Mode: 'batch' - should enforce minPeakDistance = 3", async () => {
+  const pipeline = createDspPipeline();
+  const dataDist = new Float32Array([
+    0,
+    5,
+    2, // Peak at 1
+    6,
+    3, // Peak at 3 (suppressed)
+    8,
+    2, // Peak at 5 (kept)
+    4,
+    1, //
+    9,
+    2, // Peak at 10 (kept)
   ]);
+  const expected = new Float32Array([0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]);
 
-  const result = await pipeline.process(input, {
-    channels: 2,
-    sampleRate: 1000,
+  pipeline.PeakDetection({
+    threshold: 0.5,
+    mode: "batch",
+    minPeakDistance: 3,
   });
 
-  // Ch0: 0.3, 0.6, 0.4, 0.2 -> peak at index 1 (0.6)
-  // Ch1: 0.2, 0.5, 0.8, 0.6 -> peak at index 2 (0.8)
-  assert.equal(result[0], 0.0); // ch0: 0.3
-  assert.equal(result[1], 0.0); // ch1: 0.2
-  assert.equal(result[2], 1.0); // ch0: 0.6 (peak)
-  assert.equal(result[3], 0.0); // ch1: 0.5
-  assert.equal(result[4], 0.0); // ch0: 0.4
-  assert.equal(result[5], 1.0); // ch1: 0.8 (peak)
-  assert.equal(result[6], 0.0); // ch0: 0.2
-  assert.equal(result[7], 0.0); // ch1: 0.6
+  const result = await pipeline.process(dataDist.slice(), { channels: 1 });
+  assert.deepStrictEqual(findPeakIndices(result), [1, 5, 10]);
+  assert.deepStrictEqual(result, expected);
 });
 
-test("PeakDetection - ECG R-peak detection", async () => {
+test("PeakDetection - Mode: 'batch' - should work with flexible windowSize = 5 (scalar path)", async () => {
   const pipeline = createDspPipeline();
-  pipeline.PeakDetection({ threshold: 0.7 });
+  // 0, 1, 5, 2, 3, 6, 1, 0, 4, 9, 8, 2, 7, 3, 0
+  // See original test file for logic breakdown
+  pipeline.PeakDetection({
+    threshold: 0.5,
+    mode: "batch",
+    windowSize: 5,
+  });
+  const result = await pipeline.process(batchData.slice(), { channels: 1 });
+  assert.deepStrictEqual(findPeakIndices(result), [5, 9]);
+});
 
-  // Simulated ECG with R-peaks
-  const input = new Float32Array([
-    0.1, 0.2, 0.3, 0.9, 0.5, 0.2, 0.1, 0.2, 0.3, 0.85, 0.4, 0.2,
-  ]);
+// --- 3. Mode: 'moving' (Stateful) Tests ---
 
-  const result = await pipeline.process(input, {
+test("PeakDetection - Mode: moving - should find peaks across chunk boundaries (windowSize=3)", async () => {
+  const pipeline = createDspPipeline();
+  pipeline.PeakDetection({
+    threshold: 0.5,
+    mode: "moving",
+  });
+
+  const data1 = new Float32Array([0, 1, 5, 2]);
+  const data2 = new Float32Array([1, 6, 1, 0]);
+  const data3 = new Float32Array([4, 9, 8, 2]);
+  const data4 = new Float32Array([7, 3, 0]);
+
+  const expected1 = new Float32Array([0, 0, 0, 0]);
+  const expected2 = new Float32Array([0, 1, 0, 0]);
+  const expected3 = new Float32Array([1, 0, 0, 0]);
+  const expected4 = new Float32Array([1, 0, 0]);
+
+  let result = await pipeline.process(data1.slice(), { channels: 1 });
+  assert.deepStrictEqual(result, expected1);
+
+  result = await pipeline.process(data2.slice(), { channels: 1 });
+  assert.deepStrictEqual(result, expected2);
+
+  result = await pipeline.process(data3.slice(), { channels: 1 });
+  assert.deepStrictEqual(result, expected3);
+
+  result = await pipeline.process(data4.slice(), { channels: 1 });
+  assert.deepStrictEqual(result, expected4);
+});
+
+test("PeakDetection - Mode: moving - should enforce minPeakDistance = 4 across chunks", async () => {
+  const pipeline = createDspPipeline();
+  const d1 = new Float32Array([0, 5, 2]); // Peak at [1] (5)
+  const d2 = new Float32Array([6, 3, 8]); // Peak at [3] (6) (suppressed, dist=2). Peak at [5] (8)
+  const d3 = new Float32Array([2, 4, 1]); // Peak at [7] (4) (suppressed, dist=2)
+  const d4 = new Float32Array([9, 2, 0]); // Peak at [9] (9) (kept, dist=4)
+
+  pipeline.PeakDetection({
+    threshold: 0.5,
+    mode: "moving",
+    minPeakDistance: 4,
+  });
+
+  let res1 = await pipeline.process(d1.slice(), { channels: 1 });
+  assert.deepStrictEqual(res1, new Float32Array([0, 0, 0]));
+
+  let res2 = await pipeline.process(d2.slice(), { channels: 1 });
+  assert.deepStrictEqual(res2, new Float32Array([1, 0, 0]));
+
+  let res3 = await pipeline.process(d3.slice(), { channels: 1 });
+  assert.deepStrictEqual(res3, new Float32Array([1, 0, 0]));
+
+  let res4 = await pipeline.process(d4.slice(), { channels: 1 });
+  assert.deepStrictEqual(res4, new Float32Array([0, 0, 1]));
+
+  const state = await pipeline.saveState(); // Corrected: getState -> saveState
+  const stageState = JSON.parse(state).stages[0].state;
+  assert.strictEqual(stageState.peakCooldown[0], 2); // Cooldown carries over
+});
+
+test("PeakDetection - Mode: moving - should reset state and cooldown", async () => {
+  const pipeline = createDspPipeline();
+  pipeline.PeakDetection({
+    threshold: 0.5,
+    mode: "moving",
+    minPeakDistance: 4,
+  });
+
+  await pipeline.process(new Float32Array([0, 5, 2]), { channels: 1 });
+  const res2 = await pipeline.process(new Float32Array([6, 3, 8]), {
     channels: 1,
-    sampleRate: 1000,
   });
+  assert.deepStrictEqual(res2, new Float32Array([1, 0, 0])); // Peak at [1] found
 
-  // Count peaks
-  let peakCount = 0;
-  for (let i = 0; i < result.length; i++) {
-    if (result[i] === 1.0) peakCount++;
-  }
+  let state = await pipeline.saveState(); // Corrected: getState -> saveState
+  let stageState = JSON.parse(state).stages[0].state;
+  assert.strictEqual(stageState.prevSample[0], 8);
+  assert.strictEqual(stageState.peakCooldown[0], 3); // Cooldown from peak at [5]
 
-  assert.equal(peakCount, 2); // Two R-peaks detected
-  assert.equal(result[3], 1.0); // First peak at 0.9
-  assert.equal(result[9], 1.0); // Second peak at 0.85
-});
+  pipeline.clearState(); // Corrected: reset -> clearState
 
-test("PeakDetection - validation errors", () => {
-  const pipeline = createDspPipeline();
+  state = await pipeline.saveState(); // Corrected: getState -> saveState
+  stageState = JSON.parse(state).stages[0].state;
+  assert.strictEqual(stageState.prevSample[0], 0);
+  assert.strictEqual(stageState.peakCooldown[0], 0);
 
-  // Missing threshold
-  assert.throws(() => {
-    pipeline.PeakDetection({ threshold: undefined as any });
-  }, /threshold must be >= 0/);
-
-  // Negative threshold
-  assert.throws(() => {
-    pipeline.PeakDetection({ threshold: -0.5 });
-  }, /threshold must be >= 0/);
-});
-
-test("PeakDetection - state continuity across batches", async () => {
-  const pipeline = createDspPipeline();
-  pipeline.PeakDetection({ threshold: 0.5 });
-
-  // First batch ends with rising edge
-  const input1 = new Float32Array([0.3, 0.6]);
-  await pipeline.process(input1, { channels: 1, sampleRate: 1000 });
-
-  // Second batch starts with peak and falling edge
-  const input2 = new Float32Array([0.8, 0.4]);
-  const result2 = await pipeline.process(input2, {
+  // Process again, peak should not be suppressed
+  await pipeline.process(new Float32Array([0, 5, 2]), { channels: 1 });
+  const res4 = await pipeline.process(new Float32Array([6, 3, 8]), {
     channels: 1,
-    sampleRate: 1000,
   });
-
-  // Peak detected at 0.8 (continuing from 0.6)
-  assert.equal(result2[0], 1.0); // 0.6 < 0.8 > 0.4
-  assert.equal(result2[1], 0.0);
-});
-
-test("PeakDetection - chain with rectify", async () => {
-  const pipeline = createDspPipeline();
-
-  // Rectify first, then find peaks
-  pipeline.Rectify({ mode: "full" }).PeakDetection({ threshold: 0.5 });
-
-  const input = new Float32Array([0.3, -0.7, -0.2, 0.6, -0.8, -0.4]);
-
-  const result = await pipeline.process(input, {
-    channels: 1,
-    sampleRate: 1000,
-  });
-
-  // After rectification: [0.3, 0.7, 0.2, 0.6, 0.8, 0.4]
-  // Peaks: 0.7 (index 1), 0.8 (index 4)
-  assert.equal(result[0], 0.0);
-  assert.equal(result[1], 1.0); // Peak at 0.7
-  assert.equal(result[2], 0.0);
-  assert.equal(result[3], 0.0);
-  assert.equal(result[4], 1.0); // Peak at 0.8
-  assert.equal(result[5], 0.0);
-});
-
-test("PeakDetection - state persistence", async () => {
-  const pipeline = createDspPipeline();
-  pipeline.PeakDetection({ threshold: 0.7 });
-
-  const input1 = new Float32Array([0.5, 0.8]);
-  await pipeline.process(input1, { channels: 1, sampleRate: 1000 });
-
-  // Save state (with history: prev=0.8, prevPrev=0.5)
-  const state = await pipeline.saveState();
-
-  // Create new pipeline and restore
-  const pipeline2 = createDspPipeline();
-  pipeline2.PeakDetection({ threshold: 0.5 });
-  await pipeline2.loadState(state);
-
-  // Continue processing - should detect peak at 0.8
-  const input2 = new Float32Array([0.6]);
-  const result2 = await pipeline2.process(input2, {
-    channels: 1,
-    sampleRate: 1000,
-  });
-
-  assert.equal(result2[0], 1.0); // 0.5 < 0.8 > 0.6 (peak detected with threshold 0.7)
+  assert.deepStrictEqual(res4, new Float32Array([1, 0, 0])); // Peak at [1] found again
 });

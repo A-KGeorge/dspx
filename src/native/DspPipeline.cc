@@ -882,9 +882,30 @@ namespace dsp
                 throw std::invalid_argument("PeakDetection: requires 'threshold' parameter");
             }
 
+            if (!params.Has("mode"))
+            {
+                throw std::invalid_argument("PeakDetection: requires 'mode' parameter");
+            }
+
             float threshold = params.Get("threshold").As<Napi::Number>().FloatValue();
 
-            return std::make_unique<dsp::adapters::PeakDetectionStage>(threshold);
+            // Optional mode and domain parameters
+            std::string mode = params.Has("mode")
+                                   ? params.Get("mode").As<Napi::String>().Utf8Value()
+                                   : "moving";
+            std::string domain = params.Has("domain")
+                                     ? params.Get("domain").As<Napi::String>().Utf8Value()
+                                     : "time";
+
+            // Get new optional windowSize and minPeakDistance
+            int windowSize = params.Has("windowSize")
+                                 ? params.Get("windowSize").As<Napi::Number>().Int32Value()
+                                 : 3;
+            int minPeakDistance = params.Has("minPeakDistance")
+                                      ? params.Get("minPeakDistance").As<Napi::Number>().Int32Value()
+                                      : 1;
+
+            return std::make_unique<dsp::adapters::PeakDetectionStage>(threshold, mode, domain, windowSize, minPeakDistance);
         };
 
         // ===================================================================
