@@ -2,20 +2,6 @@
 
 This roadmap outlines the planned evolution of **dspx** — a native **C++ + TypeScript DSP** framework featuring **Redis-based state persistence** and **low-overhead logging**.
 
----
-
-## 🚀 Immediate Next Steps
-
-**Resampling Operations** (Expected in next few days):
-
-- `Decimate`: Downsample by integer factor M with anti-aliasing filter
-- `Interpolate`: Upsample by integer factor L with anti-imaging filter
-- `Resample`: Rational resampling (L/M) for arbitrary sample rate conversion
-
-All three will use efficient polyphase FIR filtering implemented in C++ for maximum performance, with full TypeScript wrappers and comprehensive test coverage.
-
----
-
 ## ✅ Current Progress
 
 - [x] **Redis Integration (Serialization / Deserialization)**

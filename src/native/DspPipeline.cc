@@ -952,6 +952,37 @@ namespace dsp
 
             return std::make_unique<dsp::adapters::SnrStage>(window_size);
         };
+
+        // ===================================================================
+        // GENERIC FILTER RESTORATION (FIR & IIR)
+        // ===================================================================
+        auto filterFactory = [](const Napi::Object &params)
+        {
+            if (!params.Has("bCoeffs") || !params.Has("aCoeffs"))
+            {
+                throw std::invalid_argument("FilterStage: State missing 'bCoeffs' or 'aCoeffs'. Cannot reconstruct.");
+            }
+
+            Napi::Array bArray = params.Get("bCoeffs").As<Napi::Array>();
+            Napi::Array aArray = params.Get("aCoeffs").As<Napi::Array>();
+
+            std::vector<double> bCoeffs(bArray.Length());
+            for (uint32_t i = 0; i < bArray.Length(); ++i)
+            {
+                bCoeffs[i] = bArray.Get(i).As<Napi::Number>().DoubleValue();
+            }
+
+            std::vector<double> aCoeffs(aArray.Length());
+            for (uint32_t i = 0; i < aArray.Length(); ++i)
+            {
+                aCoeffs[i] = aArray.Get(i).As<Napi::Number>().DoubleValue();
+            }
+
+            return std::make_unique<dsp::adapters::FilterStage>(bCoeffs, aCoeffs);
+        };
+
+        m_stageFactories["filter:fir"] = filterFactory;
+        m_stageFactories["filter:iir"] = filterFactory;
     }
 
     /**
@@ -1340,18 +1371,21 @@ namespace dsp
         Napi::Function stringify = JSON.Get("stringify").As<Napi::Function>();
         return stringify.Call(JSON, {stateObj});
     }
-
     /**
-     * Load pipeline state from JSON string
-     * TypeScript retrieves this from Redis and passes it here
-     *
-     * Accepts: JSON string with pipeline configuration
+     * Load pipeline state from JSON string with Smart Merge Strategy.
+     * * Logic:
+     * 1. Iterate through the saved state history.
+     * 2. If a saved stage matches the current pipeline's next stage (by type),
+     * restore the state into the existing stage instance.
+     * 3. If there is a mismatch (e.g. saved has 'Rectify' but current has 'Filter'),
+     * dynamically create the 'Rectify' stage using the factory and insert it.
+     * 4. Finally, append any remaining stages from the current pipeline definition.
+     * * Result: The pipeline becomes a fusion of [Restorable Saved Stages] + [Current Stages]
      */
     Napi::Value DspPipeline::LoadState(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
 
-        // Validate input
         if (info.Length() < 1 || !info[0].IsString())
         {
             Napi::TypeError::New(env, "Expected state JSON string as first argument")
@@ -1363,12 +1397,10 @@ namespace dsp
 
         try
         {
-            // Parse JSON string using JavaScript's JSON.parse
             Napi::Object JSON = env.Global().Get("JSON").As<Napi::Object>();
             Napi::Function parse = JSON.Get("parse").As<Napi::Function>();
             Napi::Object stateObj = parse.Call(JSON, {Napi::String::New(env, stateJson)}).As<Napi::Object>();
 
-            // Validate state object has required fields
             if (!stateObj.Has("stages"))
             {
                 Napi::Error::New(env, "Invalid state: missing 'stages' field")
@@ -1376,34 +1408,86 @@ namespace dsp
                 return Napi::Boolean::New(env, false);
             }
 
-            // Get stages array
             Napi::Array stagesArray = stateObj.Get("stages").As<Napi::Array>();
-            uint32_t stageCount = stagesArray.Length();
+            uint32_t savedStageCount = stagesArray.Length();
 
-            // Validate stage count matches
-            if (stageCount != m_stages.size())
-            {
-                Napi::Error::New(env, "Stage count mismatch: expected " +
-                                          std::to_string(m_stages.size()) + " but got " + std::to_string(stageCount))
-                    .ThrowAsJavaScriptException();
-                return Napi::Boolean::New(env, false);
-            }
+            // Temporary container for the new merged pipeline structure
+            std::vector<std::unique_ptr<IDspStage>> newStages;
 
-            // Log restoration
-            std::cout << "Restoring pipeline state with " << stageCount << " stages" << std::endl;
+            // Index to track our position in the *current* pipeline (m_stages)
+            size_t currentIdx = 0;
 
-            // Restore each stage's state
-            for (uint32_t i = 0; i < stageCount; ++i)
+            for (uint32_t i = 0; i < savedStageCount; ++i)
             {
                 Napi::Object stageConfig = stagesArray.Get(i).As<Napi::Object>();
-                if (stageConfig.Has("state"))
+
+                if (!stageConfig.Has("type") || !stageConfig.Has("state"))
                 {
-                    Napi::Object stageState = stageConfig.Get("state").As<Napi::Object>();
-                    m_stages[i]->deserializeState(stageState);
+                    continue;
+                }
+
+                std::string savedType = stageConfig.Get("type").As<Napi::String>().Utf8Value();
+                Napi::Object stageState = stageConfig.Get("state").As<Napi::Object>();
+
+                // 1. Try to match with the current pipeline stage
+                bool matched = false;
+                if (currentIdx < m_stages.size())
+                {
+                    // Check if types match (e.g. both are "movingAverage")
+                    if (std::string(m_stages[currentIdx]->getType()) == savedType)
+                    {
+                        // MATCH: Restore state into the existing stage instance
+                        // This preserves any specific config the user might have set on the current stage
+                        m_stages[currentIdx]->deserializeState(stageState);
+                        newStages.push_back(std::move(m_stages[currentIdx]));
+                        currentIdx++;
+                        matched = true;
+                    }
+                }
+
+                // 2. If mismatch, try to reconstruct the stage from the saved state
+                if (!matched)
+                {
+                    auto it = m_stageFactories.find(savedType);
+                    if (it != m_stageFactories.end())
+                    {
+                        try
+                        {
+                            // Attempt to create stage using the state object as the config params.
+                            // (Assumes the state object contains necessary constructor args like 'windowSize')
+                            auto newStage = it->second(stageState);
+
+                            // Restore the full internal buffer state
+                            newStage->deserializeState(stageState);
+
+                            // Add to our new pipeline
+                            newStages.push_back(std::move(newStage));
+                        }
+                        catch (const std::exception &e)
+                        {
+                            // If reconstruction fails (e.g. missing params), log warning and skip
+                            std::cerr << "Warning: Failed to reconstruct stage " << savedType
+                                      << ": " << e.what() << std::endl;
+                        }
+                    }
+                    else
+                    {
+                        // Factory not found (e.g. generic FilterStage 'filter:fir' which requires explicit coefficients)
+                        std::cerr << "Warning: Unknown stage type '" << savedType
+                                  << "' in saved state (no factory available). Skipping." << std::endl;
+                    }
                 }
             }
 
-            std::cout << "State restoration complete!" << std::endl;
+            // 3. Append any remaining stages from the user's current pipeline definition
+            while (currentIdx < m_stages.size())
+            {
+                newStages.push_back(std::move(m_stages[currentIdx]));
+                currentIdx++;
+            }
+
+            // Replace the pipeline with the new merged structure
+            m_stages = std::move(newStages);
 
             return Napi::Boolean::New(env, true);
         }

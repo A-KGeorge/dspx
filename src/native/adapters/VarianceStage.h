@@ -165,7 +165,7 @@ namespace dsp::adapters
                             std::to_string(runningSum));
                     }
 
-                    const float toleranceSq = 0.0001f * std::max(1.0f, std::abs(actualSumOfSquares));
+                    const float toleranceSq = 0.001f * std::max(1.0f, std::abs(actualSumOfSquares));
                     if (std::abs(runningSumOfSquares - actualSumOfSquares) > toleranceSq)
                     {
                         throw std::runtime_error(

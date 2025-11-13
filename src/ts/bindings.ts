@@ -2777,6 +2777,7 @@ class DspProcessor {
 
         case "iir":
         default:
+          //TODO: Implement this
           throw new Error(
             `Filter type "${options.type}" not yet implemented for pipeline chaining. Use standalone filter methods instead.`
           );

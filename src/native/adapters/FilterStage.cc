@@ -153,6 +153,22 @@ namespace dsp::adapters
         Napi::Object state = Napi::Object::New(env);
         state.Set("filterType", m_isFir ? "fir" : "iir");
 
+        // --- SAVE COEFFICIENTS (New) ---
+        Napi::Array bArray = Napi::Array::New(env, m_bCoeffs.size());
+        for (size_t i = 0; i < m_bCoeffs.size(); ++i)
+        {
+            bArray.Set(i, Napi::Number::New(env, m_bCoeffs[i]));
+        }
+        state.Set("bCoeffs", bArray);
+
+        Napi::Array aArray = Napi::Array::New(env, m_aCoeffs.size());
+        for (size_t i = 0; i < m_aCoeffs.size(); ++i)
+        {
+            aArray.Set(i, Napi::Number::New(env, m_aCoeffs[i]));
+        }
+        state.Set("aCoeffs", aArray);
+        // --------------------------------
+
         if (m_isFir)
         {
             state.Set("numChannels", static_cast<uint32_t>(m_firFilters.size()));

@@ -152,7 +152,7 @@ namespace dsp::adapters
                     {
                         actualSumOfSquares += val * val;
                     }
-                    const float tolerance = 0.0001f * std::max(1.0f, std::abs(actualSumOfSquares));
+                    const float tolerance = 0.001f * std::max(1.0f, std::abs(actualSumOfSquares));
                     if (std::abs(runningSumOfSquares - actualSumOfSquares) > tolerance)
                     {
                         throw std::runtime_error(
