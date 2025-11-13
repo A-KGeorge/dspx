@@ -1,5 +1,11 @@
 # dspx
 
+## 1.2.4
+
+### Patch Changes
+
+- [`00bab51`](https://github.com/A-KGeorge/dspx/commit/00bab5170dc57469a67509de14fc86c01e3f8e01) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - pipelines of various configs can load state into each other (plug-n-play)
+
 ## 1.2.3
 
 ### Patch Changes
