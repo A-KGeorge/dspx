@@ -1,5 +1,11 @@
 # dspx
 
+## 1.2.3
+
+### Patch Changes
+
+- [`5e9b4d5`](https://github.com/A-KGeorge/dspx/commit/5e9b4d5032cd28fd38b9c06b836f02b5a3898f9a) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Added peak detection
+
 ## 1.1.6
 
 ### Patch Changes
