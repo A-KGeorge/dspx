@@ -8,6 +8,7 @@
 #pragma once
 
 #include "../IDspStage.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <cmath>
 #include <stdexcept>
@@ -151,6 +152,56 @@ namespace dsp
                 {
                     stateIndices_[ch] = stateIndicesArray.Get(ch).As<Napi::Number>().Uint32Value();
                 }
+            }
+        }
+
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeInt32(interpolationFactor_);
+            s.writeInt32(filterOrder_);
+            s.writeDouble(sampleRate_);
+            s.writeInt32(numChannels_);
+
+            // Serialize state buffers for each channel
+            for (const auto &buf : stateBuffers_)
+            {
+                s.writeFloatArray(buf);
+            }
+
+            // Serialize state indices
+            for (size_t idx : stateIndices_)
+            {
+                s.writeInt32(static_cast<int32_t>(idx));
+            }
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            int32_t factor = d.readInt32();
+            int32_t order = d.readInt32();
+            double sr = d.readDouble();
+            int32_t nCh = d.readInt32();
+
+            if (factor != interpolationFactor_ || order != filterOrder_)
+            {
+                throw std::runtime_error("Interpolator TOON: parameter mismatch");
+            }
+
+            if (nCh != numChannels_)
+            {
+                initializeStateBuffers(nCh);
+            }
+
+            // Deserialize state buffers
+            for (auto &buf : stateBuffers_)
+            {
+                buf = d.readFloatArray();
+            }
+
+            // Deserialize state indices
+            for (size_t &idx : stateIndices_)
+            {
+                idx = static_cast<size_t>(d.readInt32());
             }
         }
 

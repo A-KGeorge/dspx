@@ -1,4 +1,4 @@
-import { describe, test, beforeEach } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -17,6 +17,10 @@ describe("MovingAverage Filter", () => {
 
   beforeEach(() => {
     processor = createDspPipeline();
+  });
+
+  afterEach(() => {
+    processor.dispose();
   });
 
   describe("Batch Mode (Stateless)", () => {
@@ -204,20 +208,24 @@ describe("MovingAverage Filter", () => {
 
       // Create new processor with same pipeline structure and load state
       const processor2 = createDspPipeline();
-      processor2.MovingAverage({ mode: "moving", windowSize: 3 }); // Must match original pipeline
-      await processor2.loadState(stateJson);
+      try {
+        processor2.MovingAverage({ mode: "moving", windowSize: 3 }); // Must match original pipeline
+        await processor2.loadState(stateJson);
 
-      // Process should continue from saved state
-      const output1 = await processor.process(
-        new Float32Array([6]),
-        DEFAULT_OPTIONS
-      );
-      const output2 = await processor2.process(
-        new Float32Array([6]),
-        DEFAULT_OPTIONS
-      );
+        // Process should continue from saved state
+        const output1 = await processor.process(
+          new Float32Array([6]),
+          DEFAULT_OPTIONS
+        );
+        const output2 = await processor2.process(
+          new Float32Array([6]),
+          DEFAULT_OPTIONS
+        );
 
-      assertCloseTo(output2[0], output1[0]);
+        assertCloseTo(output2[0], output1[0]);
+      } finally {
+        processor2.dispose();
+      }
     });
 
     test("should reset state correctly", async () => {
@@ -251,11 +259,15 @@ describe("MovingAverage Filter", () => {
 
       // Should throw when loading corrupted state
       const processor2 = createDspPipeline();
-      processor2.MovingAverage({ mode: "moving", windowSize: 3 }); // Must match original pipeline
-      await assert.rejects(
-        async () => await processor2.loadState(JSON.stringify(state)),
-        /Running sum validation failed/
-      );
+      try {
+        processor2.MovingAverage({ mode: "moving", windowSize: 3 }); // Must match original pipeline
+        await assert.rejects(
+          async () => await processor2.loadState(JSON.stringify(state)),
+          /Running sum validation failed/
+        );
+      } finally {
+        processor2.dispose();
+      }
     });
 
     test("should validate window size on state load", async () => {
@@ -272,11 +284,15 @@ describe("MovingAverage Filter", () => {
 
       // Should throw when loading corrupted state
       const processor2 = createDspPipeline();
-      processor2.MovingAverage({ mode: "moving", windowSize: 3 }); // Original window size
-      await assert.rejects(
-        async () => await processor2.loadState(JSON.stringify(state)),
-        /Window size mismatch/
-      );
+      try {
+        processor2.MovingAverage({ mode: "moving", windowSize: 3 }); // Original window size
+        await assert.rejects(
+          async () => await processor2.loadState(JSON.stringify(state)),
+          /Window size mismatch/
+        );
+      } finally {
+        processor2.dispose();
+      }
     });
 
     test("should handle empty input", async () => {

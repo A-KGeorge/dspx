@@ -244,6 +244,107 @@ namespace dsp::adapters
             }
         }
 
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.startObject();
+
+            s.writeString("mode");
+            s.writeString((m_mode == ConvolutionMode::Moving) ? "moving" : "batch");
+
+            s.writeString("method");
+            std::string methodStr;
+            switch (m_method)
+            {
+            case ConvolutionMethod::Auto:
+                methodStr = "auto";
+                break;
+            case ConvolutionMethod::Direct:
+                methodStr = "direct";
+                break;
+            case ConvolutionMethod::FFT:
+                methodStr = "fft";
+                break;
+            }
+            s.writeString(methodStr);
+
+            s.writeString("kernel");
+            s.writeFloatArray(m_kernel);
+
+            if (m_mode == ConvolutionMode::Moving && m_actualMethod == ConvolutionMethod::Direct)
+            {
+                s.writeString("channels");
+                s.startArray();
+
+                for (const auto &filter : m_filters)
+                {
+                    s.startObject();
+                    auto filterState = filter.getState();
+                    const auto &bufferData = filterState.first;
+
+                    s.writeString("buffer");
+                    s.writeFloatArray(bufferData);
+                    s.endObject();
+                }
+                s.endArray();
+            }
+
+            s.endObject();
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            d.consumeToken(dsp::toon::T_OBJECT_START);
+
+            std::string key = d.readString(); // "mode"
+            std::string modeStr = d.readString();
+            ConvolutionMode newMode = (modeStr == "moving") ? ConvolutionMode::Moving : ConvolutionMode::Batch;
+            if (newMode != m_mode)
+            {
+                throw std::runtime_error("Convolution mode mismatch during TOON deserialization");
+            }
+
+            key = d.readString(); // "method"
+            d.readString();       // Skip method validation
+
+            key = d.readString(); // "kernel"
+            std::vector<float> kernel = d.readFloatArray();
+            if (kernel.size() != m_kernel.size())
+            {
+                throw std::runtime_error("Convolution kernel size mismatch during TOON deserialization");
+            }
+
+            if (modeStr == "moving" && m_actualMethod == ConvolutionMethod::Direct)
+            {
+                key = d.readString(); // "channels"
+                d.consumeToken(dsp::toon::T_ARRAY_START);
+
+                m_filters.clear();
+
+                while (d.peekToken() != dsp::toon::T_ARRAY_END)
+                {
+                    d.consumeToken(dsp::toon::T_OBJECT_START);
+
+                    d.readString(); // "buffer"
+                    std::vector<float> bufferData = d.readFloatArray();
+
+                    // Create policy with kernel
+                    utils::ConvolutionPolicy<float> policy(m_kernel);
+                    m_filters.emplace_back(m_kernel.size(), std::move(policy));
+
+                    // Restore state
+                    typename utils::ConvolutionPolicy<float>::EmptyState policyState;
+                    m_filters.back().setState(bufferData, policyState);
+
+                    d.consumeToken(dsp::toon::T_OBJECT_END);
+                }
+                d.consumeToken(dsp::toon::T_ARRAY_END);
+
+                m_is_initialized = true;
+            }
+
+            d.consumeToken(dsp::toon::T_OBJECT_END);
+        }
+
     private:
         std::vector<float> m_kernel;
         ConvolutionMode m_mode;

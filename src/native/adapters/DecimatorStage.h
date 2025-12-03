@@ -215,6 +215,86 @@ namespace dsp
             }
         }
 
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.startObject();
+
+            s.writeString("factor");
+            s.writeInt32(decimationFactor_);
+
+            s.writeString("order");
+            s.writeInt32(filterOrder_);
+
+            s.writeString("sampleRate");
+            s.writeDouble(sampleRate_);
+
+            s.writeString("phaseIndex");
+            s.writeInt32(phaseIndex_);
+
+            s.writeString("numChannels");
+            s.writeInt32(numChannels_);
+
+            s.writeString("stateBuffer");
+            s.writeFloatArray(stateBuffer_);
+
+            s.writeString("stateIndices");
+            s.startArray();
+            for (size_t idx : stateIndices_)
+            {
+                s.writeInt32(static_cast<int32_t>(idx));
+            }
+            s.endArray();
+
+            s.endObject();
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            d.consumeToken(dsp::toon::T_OBJECT_START);
+
+            std::string key = d.readString(); // "factor"
+            int factor = d.readInt32();
+            if (factor != decimationFactor_)
+            {
+                throw std::runtime_error("Decimator factor mismatch during TOON deserialization");
+            }
+
+            key = d.readString(); // "order"
+            int order = d.readInt32();
+            if (order != filterOrder_)
+            {
+                throw std::runtime_error("Decimator order mismatch during TOON deserialization");
+            }
+
+            key = d.readString(); // "sampleRate"
+            d.readDouble();       // Skip sampleRate
+
+            key = d.readString(); // "phaseIndex"
+            phaseIndex_ = d.readInt32();
+
+            key = d.readString(); // "numChannels"
+            int numCh = d.readInt32();
+
+            if (numCh != numChannels_)
+            {
+                initializeStateBuffers(numCh);
+            }
+
+            key = d.readString(); // "stateBuffer"
+            stateBuffer_ = d.readFloatArray();
+
+            key = d.readString(); // "stateIndices"
+            d.consumeToken(dsp::toon::T_ARRAY_START);
+            stateIndices_.clear();
+            while (d.peekToken() != dsp::toon::T_ARRAY_END)
+            {
+                stateIndices_.push_back(static_cast<size_t>(d.readInt32()));
+            }
+            d.consumeToken(dsp::toon::T_ARRAY_END);
+
+            d.consumeToken(dsp::toon::T_OBJECT_END);
+        }
+
         /**
          * Get decimation factor
          */

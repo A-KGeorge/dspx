@@ -38,6 +38,14 @@
         "src/native/emg",
         "src/native/vendors/eigen-3.4.0"
       ],
+      "dependencies": [
+      ],
+      "libraries": [
+      ],
+      "sources!": [
+      ],
+      "sources+": [
+      ],
       "defines": [
         "NAPI_VERSION=8"
       ],

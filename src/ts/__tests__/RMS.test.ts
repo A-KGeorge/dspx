@@ -1,4 +1,4 @@
-import { describe, test, beforeEach } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -17,6 +17,10 @@ describe("RMS Filter", () => {
 
   beforeEach(() => {
     processor = createDspPipeline();
+  });
+
+  afterEach(() => {
+    processor.dispose();
   });
 
   describe("Basic Functionality", () => {

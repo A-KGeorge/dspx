@@ -1,4 +1,4 @@
-import { describe, test, beforeEach } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -19,7 +19,11 @@ describe("Rectify Filter", () => {
     processor = createDspPipeline();
   });
 
-  describe("Full-Wave Rectification", () => {
+  afterEach(() => {
+    processor.dispose();
+  });
+
+  describe("Full Rectification", () => {
     test("should convert all values to absolute (full-wave rectification)", async () => {
       processor.Rectify({ mode: "full" });
 

@@ -349,4 +349,128 @@ namespace dsp::core
         void setCoefficients(const std::vector<T> &coeffs) { m_coefficients = coeffs; }
     };
 
+    /**
+     * @brief Policy for Exponential Moving Average (EMA).
+     *
+     * Implements EMA: EMA(t) = α * value(t) + (1 - α) * EMA(t-1)
+     * where α (alpha) is the smoothing factor (0 < α ≤ 1).
+     *
+     * This policy is optimized for scalar operations and can be SIMD-accelerated
+     * in batch processing contexts.
+     */
+    template <typename T>
+    struct EmaPolicy
+    {
+        T m_ema = 0; // Current EMA value
+        T m_alpha;   // Smoothing factor
+        bool m_initialized = false;
+
+        explicit EmaPolicy(T alpha)
+            : m_alpha(alpha)
+        {
+            if (alpha <= 0 || alpha > 1)
+            {
+                throw std::invalid_argument("EMA alpha must be in range (0, 1]");
+            }
+        }
+
+        void onAdd(T val)
+        {
+            if (!m_initialized)
+            {
+                // Initialize with first value
+                m_ema = val;
+                m_initialized = true;
+            }
+            else
+            {
+                // EMA formula: EMA(t) = α * value(t) + (1 - α) * EMA(t-1)
+                m_ema = m_alpha * val + (static_cast<T>(1) - m_alpha) * m_ema;
+            }
+        }
+
+        void onRemove(T val)
+        {
+            // EMA doesn't support removal in sliding window context
+            // This should not be called in typical EMA usage
+        }
+
+        void clear()
+        {
+            m_ema = 0;
+            m_initialized = false;
+        }
+
+        T getResult(size_t count) const
+        {
+            return m_ema;
+        }
+
+        // For state serialization
+        std::pair<T, bool> getState() const { return {m_ema, m_initialized}; }
+        void setState(T ema, bool initialized)
+        {
+            m_ema = ema;
+            m_initialized = initialized;
+        }
+
+        T getAlpha() const { return m_alpha; }
+    };
+
+    /**
+     * @brief Policy for Cumulative Moving Average (CMA).
+     *
+     * Implements CMA: CMA(n) = (CMA(n-1) * (n-1) + value(n)) / n
+     *
+     * Maintains the cumulative average over all samples seen since initialization.
+     * More efficient than recalculating from scratch each time.
+     */
+    template <typename T>
+    struct CmaPolicy
+    {
+        T m_sum = 0;        // Running sum of all values
+        size_t m_count = 0; // Total number of samples seen
+
+        void onAdd(T val)
+        {
+            m_sum += val;
+            m_count++;
+        }
+
+        void onRemove(T val)
+        {
+            // CMA doesn't support removal in typical usage
+            // If called, decrement count and sum
+            if (m_count > 0)
+            {
+                m_sum -= val;
+                m_count--;
+            }
+        }
+
+        void clear()
+        {
+            m_sum = 0;
+            m_count = 0;
+        }
+
+        T getResult(size_t windowCount) const
+        {
+            // Use the policy's internal count, not the window count
+            if (m_count == 0)
+                return 0;
+            return m_sum / static_cast<T>(m_count);
+        }
+
+        // For state serialization
+        std::pair<T, size_t> getState() const { return {m_sum, m_count}; }
+        void setState(T sum, size_t count)
+        {
+            m_sum = sum;
+            m_count = count;
+        }
+
+        size_t getCount() const { return m_count; }
+    };
+
 } // namespace dsp::core

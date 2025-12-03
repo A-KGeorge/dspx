@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../IDspStage.h"
+#include "../utils/Toon.h"
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -90,6 +91,18 @@ namespace dsp::adapters
         void reset() override
         {
             std::fill(m_prev_sample.begin(), m_prev_sample.end(), 0.0f);
+        }
+
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeInt32(m_num_channels);
+            s.writeFloatArray(m_prev_sample);
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            m_num_channels = d.readInt32();
+            m_prev_sample = d.readFloatArray();
         }
 
         bool isResizing() const override { return false; }

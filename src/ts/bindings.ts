@@ -4,8 +4,9 @@ import { dirname, join } from "node:path";
 
 import type {
   ProcessOptions,
-  RedisConfig,
   MovingAverageParams,
+  ExponentialMovingAverageParams,
+  CumulativeMovingAverageParams,
   RmsParams,
   RectifyParams,
   VarianceParams,
@@ -51,6 +52,7 @@ import {
   type FilterType,
   type FilterMode,
 } from "./filters.js";
+import { DspUtils } from "./utils.js";
 
 // Get the directory of the current file
 const __filename = fileURLToPath(import.meta.url);
@@ -254,6 +256,104 @@ class DspProcessor {
     }
     this.nativeInstance.addStage("movingAverage", params);
     this.stages.push(`movingAverage:${params.mode}`);
+    return this;
+  }
+
+  /**
+   * Add an Exponential Moving Average (EMA) stage to the pipeline
+   *
+   * EMA gives exponentially decaying weight to older samples, providing adaptive smoothing.
+   * Formula: EMA(t) = α * value(t) + (1 - α) * EMA(t-1)
+   *
+   * @param params - Configuration for the EMA filter
+   * @param params.mode - "batch" for stateless EMA (resets per chunk), "moving" for stateful with continuity
+   * @param params.alpha - Smoothing factor (0 < α ≤ 1)
+   *   - α close to 1: Fast response to changes (less smoothing)
+   *   - α close to 0: Slow response to changes (more smoothing)
+   *   - From N-period SMA: α = 2 / (N + 1)
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Batch mode: Reset EMA for each process() call
+   * pipeline.ExponentialMovingAverage({ mode: "batch", alpha: 0.3 });
+   *
+   * @example
+   * // Moving mode: EMA continues across process() calls
+   * pipeline.ExponentialMovingAverage({ mode: "moving", alpha: 0.1 });
+   *
+   * @example
+   * // Fast adaptive filter (equivalent to ~10-sample SMA)
+   * pipeline.ExponentialMovingAverage({ mode: "moving", alpha: 2 / (10 + 1) });
+   *
+   * @example
+   * // Chain with other stages for advanced processing
+   * pipeline
+   *   .ExponentialMovingAverage({ mode: "moving", alpha: 0.2 })
+   *   .Rectify({ mode: "full" })
+   *   .Rms({ mode: "moving", windowSize: 50 });
+   */
+  ExponentialMovingAverage(params: ExponentialMovingAverageParams): this {
+    // Validate alpha parameter
+    if (params.alpha === undefined) {
+      throw new TypeError(`ExponentialMovingAverage: alpha is required`);
+    }
+    if (params.alpha <= 0 || params.alpha > 1) {
+      throw new TypeError(
+        `ExponentialMovingAverage: alpha must be in range (0, 1], got ${params.alpha}`
+      );
+    }
+
+    this.nativeInstance.addStage("exponentialMovingAverage", params);
+    this.stages.push(
+      `exponentialMovingAverage:${params.mode}:α=${params.alpha}`
+    );
+    return this;
+  }
+
+  /**
+   * Add a Cumulative Moving Average (CMA) stage to the pipeline
+   *
+   * CMA is the average of ALL samples seen since initialization (not just a window).
+   * Formula: CMA(n) = (sum of all values) / n
+   *
+   * Unlike simple moving average (SMA), CMA considers entire history:
+   * - SMA: Uses fixed window of recent N samples
+   * - CMA: Uses all samples from start to current
+   *
+   * Memory-efficient: only stores running sum and count.
+   *
+   * @param params - Configuration for the CMA filter
+   * @param params.mode - "batch" for stateless CMA (resets per chunk), "moving" for stateful with continuity
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Batch mode: CMA resets for each process() call
+   * pipeline.CumulativeMovingAverage({ mode: "batch" });
+   *
+   * @example
+   * // Moving mode: CMA accumulates across all process() calls
+   * pipeline.CumulativeMovingAverage({ mode: "moving" });
+   *
+   * @example
+   * // Use case: Long-term baseline estimation from calibration data
+   * const calibrationPipeline = createDspPipeline();
+   * calibrationPipeline.CumulativeMovingAverage({ mode: "moving" });
+   *
+   * // Process calibration chunks
+   * await calibrationPipeline.process(chunk1, { channels: 1 });
+   * await calibrationPipeline.process(chunk2, { channels: 1 });
+   * await calibrationPipeline.process(chunk3, { channels: 1 });
+   * // Final output contains cumulative average across all chunks
+   *
+   * @example
+   * // Chain with variance for online statistics
+   * pipeline
+   *   .CumulativeMovingAverage({ mode: "moving" })
+   *   .tap((samples) => console.log('Running mean:', samples[samples.length - 1]));
+   */
+  CumulativeMovingAverage(params: CumulativeMovingAverageParams): this {
+    this.nativeInstance.addStage("cumulativeMovingAverage", params);
+    this.stages.push(`cumulativeMovingAverage:${params.mode}`);
     return this;
   }
 
@@ -2698,6 +2798,16 @@ class DspProcessor {
    * });
    *
    * @example
+   * // Generic IIR filter (uses Butterworth internally)
+   * pipeline.filter({
+   *   type: "iir",
+   *   mode: "highpass",
+   *   cutoffFrequency: 500,
+   *   sampleRate: 8000,
+   *   order: 2
+   * });
+   *
+   * @example
    * // Butterworth band-pass filter
    * pipeline.filter({
    *   type: "butterworth",
@@ -2776,10 +2886,12 @@ class DspProcessor {
           break;
 
         case "iir":
+          filterInstance = this.createIirFilter(options);
+          break;
+
         default:
-          //TODO: Implement this
           throw new Error(
-            `Filter type "${options.type}" not yet implemented for pipeline chaining. Use standalone filter methods instead.`
+            `Filter type not supported. Valid types: 'fir', 'iir', 'butterworth', 'chebyshev', 'biquad'`
           );
       }
     } catch (error) {
@@ -2965,6 +3077,98 @@ class DspProcessor {
   }
 
   /**
+   * Helper to create generic IIR filter from options
+   * Uses first-order filters for order=1, Butterworth otherwise
+   */
+  private createIirFilter(options: FilterOptions & { type: "iir" }): IirFilter {
+    const {
+      mode,
+      cutoffFrequency,
+      lowCutoffFrequency,
+      highCutoffFrequency,
+      order,
+    } = options as any;
+
+    // Validate order
+    if (!order || order < 1) {
+      throw new Error("IIR filter requires order >= 1");
+    }
+
+    // For first-order filters, use optimized implementations
+    if (order === 1) {
+      switch (mode) {
+        case "lowpass":
+          if (!cutoffFrequency) {
+            throw new Error("cutoffFrequency required for lowpass filter");
+          }
+          return IirFilter.createFirstOrderLowPass({
+            cutoffFrequency,
+            sampleRate: options.sampleRate,
+          });
+
+        case "highpass":
+          if (!cutoffFrequency) {
+            throw new Error("cutoffFrequency required for highpass filter");
+          }
+          return IirFilter.createFirstOrderHighPass({
+            cutoffFrequency,
+            sampleRate: options.sampleRate,
+          });
+
+        default:
+          throw new Error(
+            `First-order IIR filter only supports lowpass and highpass modes. For ${mode}, use order > 1 or a different filter type.`
+          );
+      }
+    }
+
+    // For higher-order filters, delegate to Butterworth (maximally flat response)
+    switch (mode) {
+      case "lowpass":
+        if (!cutoffFrequency) {
+          throw new Error("cutoffFrequency required for lowpass filter");
+        }
+        return IirFilter.createButterworthLowPass({
+          cutoffFrequency,
+          sampleRate: options.sampleRate,
+          order,
+        });
+
+      case "highpass":
+        if (!cutoffFrequency) {
+          throw new Error("cutoffFrequency required for highpass filter");
+        }
+        return IirFilter.createButterworthHighPass({
+          cutoffFrequency,
+          sampleRate: options.sampleRate,
+          order,
+        });
+
+      case "bandpass":
+        if (!lowCutoffFrequency || !highCutoffFrequency) {
+          throw new Error(
+            "lowCutoffFrequency and highCutoffFrequency required for bandpass filter"
+          );
+        }
+        return IirFilter.createButterworthBandPass({
+          lowCutoffFrequency,
+          highCutoffFrequency,
+          sampleRate: options.sampleRate,
+          order,
+        });
+
+      case "bandstop":
+      case "notch":
+        throw new Error(
+          `IIR bandstop/notch filters not yet implemented. Use 'butterworth' or 'chebyshev' type instead, or use biquad notch filter.`
+        );
+
+      default:
+        throw new Error(`Unsupported IIR filter mode: ${mode}`);
+    }
+  }
+
+  /**
    * Helper to create Biquad filter from options
    */
   private createBiquadFilter(
@@ -3095,8 +3299,24 @@ class DspProcessor {
     timestampsOrOptions: Float32Array | ProcessOptions,
     optionsIfTimestamps?: ProcessOptions
   ): Promise<Float32Array> {
+    let bufferToProcess: Float32Array;
+    let inferredChannels: number | undefined;
+
+    if (Array.isArray(input)) {
+      inferredChannels = input.length;
+      bufferToProcess = DspUtils.interleave(input);
+    } else {
+      bufferToProcess = input;
+    }
+
     let timestamps: Float32Array | undefined;
     let options: ProcessOptions;
+
+    if (!(bufferToProcess instanceof Float32Array)) {
+      throw new TypeError(
+        `Input samples must be a Float32Array, got ${typeof input}`
+      );
+    }
 
     // Detect which overload was called
     if (timestampsOrOptions instanceof Float32Array) {
@@ -3104,34 +3324,27 @@ class DspProcessor {
       timestamps = timestampsOrOptions;
       options = { channels: 1, ...optionsIfTimestamps };
 
-      if (timestamps.length !== input.length) {
+      if (timestamps.length !== bufferToProcess.length) {
         throw new Error(
-          `Timestamps length (${timestamps.length}) must match samples length (${input.length})`
+          `Timestamps length (${timestamps.length}) must match samples length (${bufferToProcess.length})`
         );
       }
     } else {
-      // Sample-based mode or auto-timestamps: process(samples, options)
-      options = { channels: 1, ...timestampsOrOptions };
+      // Sample-based mode: process(samples, options)
+      // Fix: ensure options is correctly formed even if arg is undefined/null
+      options = { channels: 1, ...(timestampsOrOptions || {}) };
+      // Optimization: Pass undefined timestamps, let C++ generate them
+    }
 
-      if (options.sampleRate) {
-        // Legacy sample-based mode: auto-generate timestamps from sampleRate
-        const dt = 1000 / options.sampleRate; // milliseconds per sample
-        timestamps = new Float32Array(input.length);
-        for (let i = 0; i < input.length; i++) {
-          timestamps[i] = i * dt;
-        }
-      } else {
-        // Auto-generate sequential timestamps [0, 1, 2, ...]
-        timestamps = new Float32Array(input.length);
-        for (let i = 0; i < input.length; i++) {
-          timestamps[i] = i;
-        }
-      }
+    // If using planar input, ensure channels option is set correctly
+    if (inferredChannels && options.channels === 1) {
+      options.channels = inferredChannels;
     }
 
     const startTime = performance.now();
 
     // Initialize drift detection if enabled
+    // Note: If timestamps are implicit (undefined), drift is 0 by definition, so we skip this.
     if (options.enableDriftDetection && timestamps && options.sampleRate) {
       if (
         !this.driftDetector ||
@@ -3151,7 +3364,7 @@ class DspProcessor {
     try {
       // Pool the start log
       this.poolLog("debug", "Starting pipeline processing", {
-        sampleCount: input.length,
+        sampleCount: bufferToProcess.length,
         channels: options.channels,
         stages: this.stages.length,
         mode: options.sampleRate ? "sample-based" : "time-based",
@@ -3159,11 +3372,19 @@ class DspProcessor {
 
       // Call native process with timestamps
       // Note: The input buffer is modified in-place for zero-copy performance
-      const result = await this.nativeInstance.process(
-        input,
-        timestamps,
-        options
-      );
+      let result: Float32Array;
+
+      if (timestamps) {
+        // Explicit timestamps provided
+        result = await this.nativeInstance.process(
+          bufferToProcess,
+          timestamps,
+          options
+        );
+      } else {
+        // Implicit timestamps -> C++ generates them
+        result = await this.nativeInstance.process(bufferToProcess, options);
+      }
 
       // Execute tap callbacks for debugging/inspection
       if (this.tapCallbacks.length > 0) {
@@ -3239,10 +3460,10 @@ class DspProcessor {
   }
 
   /**
-   * Process a copy of the audio data through the DSP pipeline
+   * Process a copy of the input data through the DSP pipeline
    * This method creates a copy of the input, so the original is preserved
    *
-   * @param input - Float32Array containing interleaved audio samples (original is preserved)
+   * @param input - Float32Array containing interleaved input samples (original is preserved)
    * @param timestampsOrOptions - Either timestamps array or processing options (sample rate and channel count)
    * @param optionsIfTimestamps - Processing options if timestamps were provided in second parameter
    * @returns Promise that resolves to a new Float32Array with the processed data
@@ -3261,7 +3482,9 @@ class DspProcessor {
     optionsIfTimestamps?: ProcessOptions
   ): Promise<Float32Array> {
     // Create a copy to preserve the original
-    const copy = new Float32Array(input);
+    const copy = Array.isArray(input)
+      ? DspUtils.interleave(input)
+      : new Float32Array(input);
 
     // Handle both overloaded signatures by delegating to process()
     if (timestampsOrOptions instanceof Float32Array) {
@@ -3275,34 +3498,286 @@ class DspProcessor {
   }
 
   /**
-   * Save the current pipeline state as a JSON string
-   * TypeScript can then store this in Redis or other persistent storage
-   *
-   * @returns JSON string containing the pipeline state
-   *
-   * @example
-   * const stateJson = await pipeline.saveState();
-   * await redis.set('dsp:state', stateJson);
+   * Process data synchronously (BLOCKING).
+   * * ⚠️ PERFORMANCE WARNING:
+   * Only use this method inside Worker Threads or Cluster Workers.
+   * Using this on the Main Thread of a server will block the Event Loop.
+   * * This method bypasses the libuv thread pool, running DSP logic directly
+   * on the calling thread. Ideal for high-frequency real-time audio loops.
+   * * @param input - Float32Array containing samples (modified in-place if no resizing)
+   * @param timestampsOrOptions - Timestamps array or options object
+   * @param optionsIfTimestamps - Options object if timestamps provided
    */
-  async saveState(): Promise<string> {
-    return this.nativeInstance.saveState();
+  processSync(
+    input: Float32Array,
+    timestampsOrOptions: Float32Array | ProcessOptions,
+    optionsIfTimestamps?: ProcessOptions
+  ): Float32Array {
+    let bufferToProcess: Float32Array;
+    let inferredChannels: number | undefined;
+
+    if (Array.isArray(input)) {
+      inferredChannels = input.length;
+      bufferToProcess = DspUtils.interleave(input);
+    } else {
+      bufferToProcess = input;
+    }
+
+    let timestamps: Float32Array | undefined;
+    let options: ProcessOptions;
+
+    if (!(bufferToProcess instanceof Float32Array)) {
+      throw new TypeError(
+        `Input samples must be a Float32Array, got ${typeof input}`
+      );
+    }
+
+    // Detect which overload was called
+    if (timestampsOrOptions instanceof Float32Array) {
+      // Time-based mode: process(samples, timestamps, options)
+      timestamps = timestampsOrOptions;
+      options = { channels: 1, ...optionsIfTimestamps };
+
+      if (timestamps.length !== bufferToProcess.length) {
+        throw new Error(
+          `Timestamps length (${timestamps.length}) must match samples length (${bufferToProcess.length})`
+        );
+      }
+    } else {
+      // Sample-based mode: process(samples, options)
+      // Fix: ensure options is correctly formed even if arg is undefined/null
+      options = { channels: 1, ...(timestampsOrOptions || {}) };
+      // Optimization: Pass undefined timestamps, let C++ generate them
+    }
+
+    // If using planar input, ensure channels option is set correctly
+    if (inferredChannels && options.channels === 1) {
+      options.channels = inferredChannels;
+    }
+
+    const startTime = performance.now();
+
+    // Initialize drift detection if enabled
+    // Note: If timestamps are implicit (undefined), drift is 0 by definition, so we skip this.
+    if (options.enableDriftDetection && timestamps && options.sampleRate) {
+      if (
+        !this.driftDetector ||
+        this.driftDetector.getExpectedSampleRate() !== options.sampleRate
+      ) {
+        // Create new detector if it doesn't exist or sample rate changed
+        this.driftDetector = new DriftDetector({
+          expectedSampleRate: options.sampleRate,
+          driftThreshold: options.driftThreshold ?? 10,
+          onDriftDetected: options.onDriftDetected,
+        });
+      }
+      // Process timestamps to detect drift
+      this.driftDetector.processBatch(timestamps);
+    }
+
+    try {
+      // Pool the start log
+      this.poolLog("debug", "Starting pipeline processing", {
+        sampleCount: input.length,
+        channels: options.channels,
+        stages: this.stages.length,
+        mode: options.sampleRate ? "sample-based" : "time-based",
+      });
+
+      // Call native process with timestamps
+      // Note: The input buffer is modified in-place for zero-copy performance
+      let result: Float32Array;
+
+      if (timestamps) {
+        // Explicit timestamps provided
+        result = this.nativeInstance.processSync(
+          bufferToProcess,
+          timestamps,
+          options
+        );
+      } else {
+        // Implicit timestamps -> C++ generates them
+        result = this.nativeInstance.processSync(bufferToProcess, options);
+      }
+
+      // Execute tap callbacks for debugging/inspection
+      if (this.tapCallbacks.length > 0) {
+        for (const { stageName, callback } of this.tapCallbacks) {
+          try {
+            callback(result, stageName);
+          } catch (tapError) {
+            // Don't let tap errors break the pipeline
+            console.error(`Tap callback error at ${stageName}:`, tapError);
+          }
+        }
+      }
+
+      // Execute onBatch callback (efficient - one call per process)
+      if (this.callbacks?.onBatch) {
+        const stageName = this.stages.join(" → ") || "pipeline";
+        const batch: SampleBatch = {
+          stage: stageName,
+          samples: result,
+          startIndex: 0,
+          count: result.length,
+        };
+        this.callbacks.onBatch(batch);
+      }
+
+      // Execute onSample callbacks if provided (LEGACY - expensive)
+      // WARNING: This can be expensive for large buffers
+      if (this.callbacks?.onSample) {
+        const stageName = this.stages.join(" → ") || "pipeline";
+        for (let i = 0; i < result.length; i++) {
+          this.callbacks.onSample(result[i], i, stageName);
+        }
+      }
+
+      // Execute onStageComplete callback
+      if (this.callbacks?.onStageComplete) {
+        const duration = performance.now() - startTime;
+        const pipelineName = this.stages.join(" → ") || "pipeline";
+        this.callbacks.onStageComplete(pipelineName, duration);
+      }
+
+      // Pool the completion log
+      const duration = performance.now() - startTime;
+      this.poolLog("info", "Pipeline processing completed", {
+        durationMs: duration,
+        sampleCount: result.length,
+      });
+
+      // Flush all pooled logs at the end
+      this.flushLogs();
+
+      return result;
+    } catch (error) {
+      const err = error as Error;
+
+      // Execute onError callback
+      if (this.callbacks?.onError) {
+        const pipelineName = this.stages.join(" → ") || "pipeline";
+        this.callbacks.onError(pipelineName, err);
+      }
+
+      // Pool the error log
+      this.poolLog("error", "Pipeline processing failed", {
+        error: err.message,
+        stack: err.stack,
+      });
+
+      // Flush logs even on error
+      this.flushLogs();
+
+      throw error;
+    }
   }
 
   /**
-   * Load pipeline state from a JSON string
-   * TypeScript retrieves this from Redis and passes it to restore state
+   * Process a copy of the input data through the DSP pipeline
+   * This method creates a copy of the input, so the original is preserved
+   * * ⚠️ PERFORMANCE WARNING:
+   * Only use this method inside Worker Threads or Cluster Workers.
+   * Using this on the Main Thread of a server will block the Event Loop.
+   * * This method bypasses the libuv thread pool, running DSP logic directly
+   * on the calling thread. Ideal for high-frequency real-time audio loops.
+   * @param input - Float32Array containing interleaved input samples (original is preserved)
+   * @param timestampsOrOptions - Either timestamps array or processing options (sample rate and channel count)
+   * @param optionsIfTimestamps - Processing options if timestamps were provided in second parameter
+   * @returns Promise that resolves to a new Float32Array with the processed data
    *
-   * @param stateJson - JSON string containing the pipeline state
+   * @example
+   * // Legacy sample-based (original preserved)
+   * const output = await pipeline.processSyncCopy(samples, { sampleRate: 100, channels: 1 });
+   *
+   * @example
+   * // Time-based with explicit timestamps (original preserved)
+   * const output = await pipeline.processSyncCopy(samples, timestamps, { channels: 1 });
+   */
+  processSyncCopy(
+    input: Float32Array,
+    timestampsOrOptions: Float32Array | ProcessOptions,
+    optionsIfTimestamps?: ProcessOptions
+  ): Float32Array {
+    const copy = Array.isArray(input)
+      ? DspUtils.interleave(input)
+      : new Float32Array(input);
+
+    // Handle both overloaded signatures by delegating to process()
+    if (timestampsOrOptions instanceof Float32Array) {
+      // Time-based mode: process(samples, timestamps, options)
+      const timestampsCopy = new Float32Array(timestampsOrOptions);
+      return this.processSync(copy, timestampsCopy, optionsIfTimestamps!);
+    } else {
+      // Legacy mode: process(samples, options)
+      return this.processSync(copy, timestampsOrOptions);
+    }
+  }
+
+  /**
+   * @brief Dispose of the DSP pipeline and free native resources
+   * After calling this method, the instance should not be used again
+   *
+   * @example
+   * const pipeline = createDspPipeline()
+   *   .MovingAverage({ mode: "moving", windowSize: 100 })
+   *   .Rectify({ mode: 'full' })
+   * const output = await pipeline.process(samples, { sampleRate: 1000, channels: 1 });
+   * pipeline.dispose();
+   * // Free resources when done, pipeline cannot be used after this for processing the input signal since the stages have been disposed
+   */
+  dispose(): void {
+    this.nativeInstance.dispose();
+  }
+
+  /**
+   * Save the current pipeline state
+   * Supports two formats:
+   * - JSON (default): Returns a string for text-based storage
+   * - TOON: Returns a Buffer for binary serialization (60-70% smaller, faster)
+   *
+   * @param options - Optional configuration with format: 'json' | 'toon'
+   * @returns JSON string (default) or Buffer (if format: 'toon')
+   *
+   * @example
+   * // Default JSON format
+   * const stateJson = await pipeline.saveState();
+   * await redis.set('dsp:state', stateJson);
+   *
+   * @example
+   * // TOON binary format (smaller, faster)
+   * const stateBinary = await pipeline.saveState({ format: 'toon' });
+   * await redis.set('dsp:state', stateBinary);
+   */
+  async saveState(options?: {
+    format?: "json" | "toon";
+  }): Promise<string | Buffer> {
+    return this.nativeInstance.saveState(options);
+  }
+
+  /**
+   * Load pipeline state from JSON string or TOON binary Buffer
+   * Auto-detects format: Buffer → TOON, string → JSON
+   *
+   * @param state - JSON string or TOON Buffer containing the pipeline state
    * @returns Promise that resolves to true if successful
    *
    * @example
+   * // Load JSON state
    * const stateJson = await redis.get('dsp:state');
    * if (stateJson) {
    *   await pipeline.loadState(stateJson);
    * }
+   *
+   * @example
+   * // Load TOON binary state (auto-detected)
+   * const stateBinary = await redis.getBuffer('dsp:state');
+   * if (stateBinary) {
+   *   await pipeline.loadState(stateBinary);
+   * }
    */
-  async loadState(stateJson: string): Promise<boolean> {
-    return this.nativeInstance.loadState(stateJson);
+  async loadState(state: string | Buffer): Promise<boolean> {
+    return this.nativeInstance.loadState(state);
   }
 
   /**
@@ -3353,18 +3828,14 @@ class DspProcessor {
  *
  * @example
  * // Create pipeline with Redis state persistence
- * const pipeline = createDspPipeline({
- *   redisHost: 'localhost',
- *   redisPort: 6379,
- *   stateKey: 'dsp:channel1'
- * });
+ * const pipeline = createDspPipeline();
  *
  * @example
  * // Create pipeline without Redis (state is not persisted)
  * const pipeline = createDspPipeline();
  */
-export function createDspPipeline(config?: RedisConfig): DspProcessor {
-  const nativeInstance = new DspAddon.DspPipeline(config);
+export function createDspPipeline(): DspProcessor {
+  const nativeInstance = new DspAddon.DspPipeline();
   return new DspProcessor(nativeInstance);
 }
 

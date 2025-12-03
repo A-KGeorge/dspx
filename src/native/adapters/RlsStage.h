@@ -199,6 +199,82 @@ namespace dsp
                 }
             }
 
+            void serializeToon(dsp::toon::Serializer &s) const override
+            {
+                s.startObject();
+
+                s.writeString("numTaps");
+                s.writeInt32(static_cast<int32_t>(m_numTaps));
+
+                s.writeString("lambda");
+                s.writeFloat(m_lambda);
+
+                s.writeString("delta");
+                s.writeFloat(m_delta);
+
+                s.writeString("initialized");
+                s.writeBool(m_initialized);
+
+                if (m_initialized && m_filter)
+                {
+                    // Serialize weights
+                    s.writeString("weights");
+                    s.writeFloatArray(m_filter->getWeights());
+
+                    // Serialize inverse covariance matrix
+                    s.writeString("inverseCov");
+                    s.writeFloatArray(m_filter->getInverseCov());
+
+                    // Serialize buffer
+                    const auto &buffer = m_filter->getBuffer();
+                    std::vector<float> bufferData = buffer.toVector();
+                    s.writeString("buffer");
+                    s.writeFloatArray(bufferData);
+                }
+
+                s.endObject();
+            }
+
+            void deserializeToon(dsp::toon::Deserializer &d) override
+            {
+                d.consumeToken(dsp::toon::T_OBJECT_START);
+
+                std::string key = d.readString(); // "numTaps"
+                m_numTaps = d.readInt32();
+
+                key = d.readString(); // "lambda"
+                m_lambda = d.readFloat();
+
+                key = d.readString(); // "delta"
+                m_delta = d.readFloat();
+
+                key = d.readString(); // "initialized"
+                m_initialized = d.readBool();
+
+                if (m_initialized)
+                {
+                    // Recreate filter
+                    m_filter = std::make_unique<dsp::core::RlsFilter>(m_numTaps, m_lambda, m_delta);
+
+                    // Restore weights
+                    key = d.readString(); // "weights"
+                    std::vector<float> weights = d.readFloatArray();
+                    m_filter->setWeights(weights);
+
+                    // Restore inverse covariance matrix
+                    key = d.readString(); // "inverseCov"
+                    std::vector<float> inverseCov = d.readFloatArray();
+                    m_filter->setInverseCov(inverseCov);
+
+                    // Restore buffer
+                    key = d.readString(); // "buffer"
+                    std::vector<float> bufferData = d.readFloatArray();
+                    m_filter->setBuffer(bufferData);
+                }
+
+                d.consumeToken(dsp::toon::T_OBJECT_END);
+            }
+
         private:
             void ensureScratchBuffers(size_t samplesPerChannel)
             {

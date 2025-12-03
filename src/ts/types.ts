@@ -51,15 +51,6 @@ export interface ProcessOptions {
 }
 
 /**
- * Redis configuration for state persistence
- */
-export interface RedisConfig {
-  redisHost?: string;
-  redisPort?: number;
-  stateKey?: string;
-}
-
-/**
  * Parameters for adding a moving average stage
  *
  * Two windowing modes supported:
@@ -81,6 +72,43 @@ export interface MovingAverageParams {
    * Takes precedence over windowSize if both provided
    */
   windowDuration?: number;
+}
+
+/**
+ * Parameters for adding an Exponential Moving Average (EMA) stage
+ *
+ * EMA gives exponentially decaying weight to older samples.
+ * Formula: EMA(t) = α * value(t) + (1 - α) * EMA(t-1)
+ *
+ * @property mode - "batch" for stateless EMA, "moving" for stateful with continuity
+ * @property alpha - Smoothing factor (0 < α ≤ 1)
+ *   - α close to 1: Fast response (less smoothing)
+ *   - α close to 0: Slow response (more smoothing)
+ *   - From N-period SMA: α = 2 / (N + 1)
+ */
+export interface ExponentialMovingAverageParams {
+  mode: "batch" | "moving";
+
+  /**
+   * Smoothing factor (0 < α ≤ 1)
+   * Required for both batch and moving modes
+   */
+  alpha: number;
+}
+
+/**
+ * Parameters for adding a Cumulative Moving Average (CMA) stage
+ *
+ * CMA is the average of all samples seen since initialization.
+ * Formula: CMA(n) = (sum of all values) / n
+ *
+ * Unlike SMA (fixed window), CMA considers ALL historical data.
+ * Memory-efficient: only stores running sum and count.
+ *
+ * @property mode - "batch" for stateless CMA, "moving" for stateful with continuity
+ */
+export interface CumulativeMovingAverageParams {
+  mode: "batch" | "moving";
 }
 
 /**

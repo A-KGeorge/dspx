@@ -2,7 +2,7 @@
  * Tests for Wavelet Transform and Hilbert Envelope Pipeline Stages
  */
 
-import { describe, test, beforeEach } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -21,6 +21,10 @@ describe("Wavelet Transform Stage", () => {
 
   beforeEach(() => {
     processor = createDspPipeline();
+  });
+
+  afterEach(() => {
+    processor.dispose();
   });
 
   describe("Haar Wavelet (db1)", () => {
@@ -175,6 +179,10 @@ describe("Hilbert Envelope Stage", () => {
     processor = createDspPipeline();
   });
 
+  afterEach(() => {
+    processor.dispose();
+  });
+
   describe("Basic Functionality", () => {
     test("should compute envelope of amplitude-modulated signal", async () => {
       processor.HilbertEnvelope({ windowSize: 128 });
@@ -218,9 +226,13 @@ describe("Hilbert Envelope Stage", () => {
 
       for (const windowSize of [64, 128, 256]) {
         const proc = createDspPipeline();
-        proc.HilbertEnvelope({ windowSize });
-        const output = await proc.process(input, DEFAULT_OPTIONS);
-        assert(output.length > 0, `windowSize=${windowSize} should work`);
+        try {
+          proc.HilbertEnvelope({ windowSize });
+          const output = await proc.process(input, DEFAULT_OPTIONS);
+          assert(output.length > 0, `windowSize=${windowSize} should work`);
+        } finally {
+          proc.dispose();
+        }
       }
     });
   });
@@ -296,16 +308,20 @@ describe("Combined Wavelet and Hilbert Analysis", () => {
   test("should chain wavelet decomposition with envelope detection", async () => {
     const processor = createDspPipeline();
 
-    processor
-      .WaveletTransform({ wavelet: "db4" })
-      .HilbertEnvelope({ windowSize: 64 });
+    try {
+      processor
+        .WaveletTransform({ wavelet: "db4" })
+        .HilbertEnvelope({ windowSize: 64 });
 
-    const input = new Float32Array(128);
-    for (let i = 0; i < input.length; i++) {
-      input[i] = Math.sin((2 * Math.PI * i) / 16) + 0.5 * Math.random();
+      const input = new Float32Array(128);
+      for (let i = 0; i < input.length; i++) {
+        input[i] = Math.sin((2 * Math.PI * i) / 16) + 0.5 * Math.random();
+      }
+
+      const output = await processor.process(input, DEFAULT_OPTIONS);
+      assert(output.length > 0, "Should chain wavelet → Hilbert");
+    } finally {
+      processor.dispose();
     }
-
-    const output = await processor.process(input, DEFAULT_OPTIONS);
-    assert(output.length > 0, "Should chain wavelet → Hilbert");
   });
 });

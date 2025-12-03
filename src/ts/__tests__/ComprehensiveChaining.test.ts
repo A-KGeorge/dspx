@@ -1,4 +1,4 @@
-import { describe, test, beforeEach } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -32,6 +32,10 @@ describe("Comprehensive DSP Pipeline Chaining", () => {
 
   beforeEach(() => {
     processor = createDspPipeline();
+  });
+
+  afterEach(() => {
+    processor.dispose();
   });
 
   describe("Audio Processing Chains", () => {
@@ -457,7 +461,9 @@ describe("Comprehensive DSP Pipeline Chaining", () => {
       const signal1 = generateSineWave(200, DEFAULT_OPTIONS.sampleRate, 0.1);
       await processor.process(signal1, DEFAULT_OPTIONS);
 
-      const stateJson = await processor.saveState();
+      const rawState = await processor.saveState();
+      const stateJson =
+        typeof rawState === "string" ? rawState : rawState.toString("utf-8");
       const state = JSON.parse(stateJson);
       assert.equal(state.stages.length, 3, "Should have 3 stages");
 

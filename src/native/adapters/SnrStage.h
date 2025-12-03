@@ -185,6 +185,51 @@ namespace dsp::adapters
             m_initialized = true;
         }
 
+        inline void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            // Write window size
+            s.writeInt32(static_cast<int32_t>(m_window_size));
+
+            // Get and write signal RMS filter state
+            auto signal_state = m_signal_rms.getState();
+            const auto &signal_buffer = signal_state.first;
+            float signal_sum = signal_state.second;
+
+            s.writeFloatArray(signal_buffer);
+            s.writeFloat(signal_sum);
+
+            // Get and write noise RMS filter state
+            auto noise_state = m_noise_rms.getState();
+            const auto &noise_buffer = noise_state.first;
+            float noise_sum = noise_state.second;
+
+            s.writeFloatArray(noise_buffer);
+            s.writeFloat(noise_sum);
+        }
+
+        inline void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            // Read and validate window size
+            int32_t window_size = d.readInt32();
+            if (window_size <= 0)
+                throw std::runtime_error("Invalid window_size in SnrStage deserialization");
+            m_window_size = static_cast<size_t>(window_size);
+
+            // Read signal RMS filter state
+            std::vector<float> signal_buffer = d.readFloatArray();
+            float signal_sum = d.readFloat();
+
+            // Read noise RMS filter state
+            std::vector<float> noise_buffer = d.readFloatArray();
+            float noise_sum = d.readFloat();
+
+            // Restore state to RMS filters
+            m_signal_rms.setState(signal_buffer, signal_sum);
+            m_noise_rms.setState(noise_buffer, noise_sum);
+
+            m_initialized = true;
+        }
+
         void reset() override
         {
             m_signal_rms.clear();

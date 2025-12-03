@@ -1,4 +1,4 @@
-import { describe, test, beforeEach } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -19,9 +19,15 @@ describe("DSP Pipeline Chaining", () => {
     processor = createDspPipeline();
   });
 
+  afterEach(() => {
+    processor.dispose();
+  });
+
   describe("Two-Stage Chains", () => {
     test("should chain MovingAverage → Rectify", async () => {
-      processor.MovingAverage({ mode: "moving", windowSize: 2 }).Rectify({ mode: "full" });
+      processor
+        .MovingAverage({ mode: "moving", windowSize: 2 })
+        .Rectify({ mode: "full" });
 
       // Input with negative values
       const input = new Float32Array([1, -3, 2, -4]);
@@ -45,7 +51,9 @@ describe("DSP Pipeline Chaining", () => {
     });
 
     test("should chain Rectify → MovingAverage", async () => {
-      processor.Rectify({ mode: "full" }).MovingAverage({ mode: "moving", windowSize: 2 });
+      processor
+        .Rectify({ mode: "full" })
+        .MovingAverage({ mode: "moving", windowSize: 2 });
 
       const input = new Float32Array([1, -3, 2, -4]);
       const output = await processor.process(input, DEFAULT_OPTIONS);
@@ -63,7 +71,9 @@ describe("DSP Pipeline Chaining", () => {
     });
 
     test("should chain MovingAverage → RMS", async () => {
-      processor.MovingAverage({ mode: "moving", windowSize: 2 }).Rms({ mode: "moving", windowSize: 2 });
+      processor
+        .MovingAverage({ mode: "moving", windowSize: 2 })
+        .Rms({ mode: "moving", windowSize: 2 });
 
       const input = new Float32Array([4, 0, 8, 0]);
       const output = await processor.process(input, DEFAULT_OPTIONS);
@@ -86,7 +96,9 @@ describe("DSP Pipeline Chaining", () => {
     });
 
     test("should chain Rectify → RMS", async () => {
-      processor.Rectify({ mode: "half" }).Rms({ mode: "moving", windowSize: 2 });
+      processor
+        .Rectify({ mode: "half" })
+        .Rms({ mode: "moving", windowSize: 2 });
 
       const input = new Float32Array([3, -3, 4, -4]);
       const output = await processor.process(input, DEFAULT_OPTIONS);
@@ -165,7 +177,9 @@ describe("DSP Pipeline Chaining", () => {
 
   describe("State Management with Chains", () => {
     test("should save and restore state for two-stage chain", async () => {
-      processor.MovingAverage({ mode: "moving", windowSize: 2 }).Rectify({ mode: "full" });
+      processor
+        .MovingAverage({ mode: "moving", windowSize: 2 })
+        .Rectify({ mode: "full" });
 
       // Build state
       await processor.process(new Float32Array([1, -2, 3]), DEFAULT_OPTIONS);
@@ -180,20 +194,26 @@ describe("DSP Pipeline Chaining", () => {
 
       // Load into new processor
       const processor2 = createDspPipeline();
-      processor2.MovingAverage({ mode: "moving", windowSize: 2 }).Rectify({ mode: "full" });
-      await processor2.loadState(stateJson);
+      try {
+        processor2
+          .MovingAverage({ mode: "moving", windowSize: 2 })
+          .Rectify({ mode: "full" });
+        await processor2.loadState(stateJson);
 
-      // Both should produce same output
-      const output1 = await processor.process(
-        new Float32Array([4]),
-        DEFAULT_OPTIONS
-      );
-      const output2 = await processor2.process(
-        new Float32Array([4]),
-        DEFAULT_OPTIONS
-      );
+        // Both should produce same output
+        const output1 = await processor.process(
+          new Float32Array([4]),
+          DEFAULT_OPTIONS
+        );
+        const output2 = await processor2.process(
+          new Float32Array([4]),
+          DEFAULT_OPTIONS
+        );
 
-      assertCloseTo(output2[0], output1[0]);
+        assertCloseTo(output2[0], output1[0]);
+      } finally {
+        processor2.dispose();
+      }
     });
 
     test("should save and restore state for three-stage chain", async () => {
@@ -216,26 +236,32 @@ describe("DSP Pipeline Chaining", () => {
 
       // Load and verify continuity
       const processor2 = createDspPipeline();
-      processor2
-        .MovingAverage({ mode: "moving", windowSize: 2 })
-        .Rms({ mode: "moving", windowSize: 2 })
-        .Rectify({ mode: "half" });
-      await processor2.loadState(stateJson);
+      try {
+        processor2
+          .MovingAverage({ mode: "moving", windowSize: 2 })
+          .Rms({ mode: "moving", windowSize: 2 })
+          .Rectify({ mode: "half" });
+        await processor2.loadState(stateJson);
 
-      const output1 = await processor.process(
-        new Float32Array([5]),
-        DEFAULT_OPTIONS
-      );
-      const output2 = await processor2.process(
-        new Float32Array([5]),
-        DEFAULT_OPTIONS
-      );
+        const output1 = await processor.process(
+          new Float32Array([5]),
+          DEFAULT_OPTIONS
+        );
+        const output2 = await processor2.process(
+          new Float32Array([5]),
+          DEFAULT_OPTIONS
+        );
 
-      assertCloseTo(output2[0], output1[0]);
+        assertCloseTo(output2[0], output1[0]);
+      } finally {
+        processor2.dispose();
+      }
     });
 
     test("should maintain state continuity across batches in chain", async () => {
-      processor.MovingAverage({ mode: "moving", windowSize: 3 }).Rms({ mode: "moving", windowSize: 2 });
+      processor
+        .MovingAverage({ mode: "moving", windowSize: 3 })
+        .Rms({ mode: "moving", windowSize: 2 });
 
       // Process multiple batches
       const output1 = await processor.process(
@@ -283,31 +309,42 @@ describe("DSP Pipeline Chaining", () => {
   describe("Order Dependency", () => {
     test("should produce different results with different chain order", async () => {
       const processor1 = createDspPipeline();
-      processor1.Rectify({ mode: "half" }).MovingAverage({ mode: "moving", windowSize: 2 });
-
       const processor2 = createDspPipeline();
-      processor2.MovingAverage({ mode: "moving", windowSize: 2 }).Rectify({ mode: "half" });
 
-      const input = new Float32Array([1, -3, 2]);
+      try {
+        processor1
+          .Rectify({ mode: "half" })
+          .MovingAverage({ mode: "moving", windowSize: 2 });
+        processor2
+          .MovingAverage({ mode: "moving", windowSize: 2 })
+          .Rectify({ mode: "half" });
 
-      const output1 = await processor1.process(
-        new Float32Array(input),
-        DEFAULT_OPTIONS
-      );
-      const output2 = await processor2.process(
-        new Float32Array(input),
-        DEFAULT_OPTIONS
-      );
+        const input = new Float32Array([1, -3, 2]);
 
-      // Processor1: Rectify first → [1, 0, 2] → MovingAvg → [1, 0.5, 1]
-      // Processor2: MovingAvg first → [1, -1, 0.5] → Rectify → [1, 0, 0.5]
-      assert.notDeepEqual(Array.from(output1), Array.from(output2));
+        const output1 = await processor1.process(
+          new Float32Array(input),
+          DEFAULT_OPTIONS
+        );
+        const output2 = await processor2.process(
+          new Float32Array(input),
+          DEFAULT_OPTIONS
+        );
+
+        // Processor1: Rectify first → [1, 0, 2] → MovingAvg → [1, 0.5, 1]
+        // Processor2: MovingAvg first → [1, -1, 0.5] → Rectify → [1, 0, 0.5]
+        assert.notDeepEqual(Array.from(output1), Array.from(output2));
+      } finally {
+        processor1.dispose();
+        processor2.dispose();
+      }
     });
   });
 
   describe("Complex Scenarios", () => {
     test("should handle empty input in chain", async () => {
-      processor.MovingAverage({ mode: "moving", windowSize: 2 }).Rms({ mode: "moving", windowSize: 2 });
+      processor
+        .MovingAverage({ mode: "moving", windowSize: 2 })
+        .Rms({ mode: "moving", windowSize: 2 });
 
       const output = await processor.process(
         new Float32Array([]),
@@ -365,7 +402,9 @@ describe("DSP Pipeline Chaining", () => {
 
   describe("Edge Cases in Chains", () => {
     test("should handle all-zero signal through chain", async () => {
-      processor.MovingAverage({ mode: "moving", windowSize: 3 }).Rms({ mode: "moving", windowSize: 2 });
+      processor
+        .MovingAverage({ mode: "moving", windowSize: 3 })
+        .Rms({ mode: "moving", windowSize: 2 });
 
       const input = new Float32Array([0, 0, 0, 0, 0]);
       const output = await processor.process(input, DEFAULT_OPTIONS);
@@ -374,7 +413,9 @@ describe("DSP Pipeline Chaining", () => {
     });
 
     test("should handle extreme values through chain", async () => {
-      processor.Rectify({ mode: "full" }).MovingAverage({ mode: "moving", windowSize: 2 });
+      processor
+        .Rectify({ mode: "full" })
+        .MovingAverage({ mode: "moving", windowSize: 2 });
 
       const input = new Float32Array([1e6, -1e6, 1e-6, -1e-6]);
       const output = await processor.process(input, DEFAULT_OPTIONS);

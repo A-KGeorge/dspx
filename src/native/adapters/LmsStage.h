@@ -176,6 +176,69 @@ namespace dsp
             }
         }
 
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.startObject();
+
+            s.writeString("numTaps");
+            s.writeInt32(static_cast<int32_t>(m_numTaps));
+
+            s.writeString("learningRate");
+            s.writeFloat(m_learningRate);
+
+            s.writeString("normalized");
+            s.writeBool(m_normalized);
+
+            s.writeString("lambda");
+            s.writeFloat(m_lambda);
+
+            s.writeString("initialized");
+            s.writeBool(m_initialized);
+
+            if (m_initialized)
+            {
+                auto weights = m_filter->getWeights(0);
+                s.writeString("weights");
+                s.writeFloatArray(weights);
+            }
+
+            s.endObject();
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            d.consumeToken(dsp::toon::T_OBJECT_START);
+
+            std::string key = d.readString(); // "numTaps"
+            m_numTaps = d.readInt32();
+
+            key = d.readString(); // "learningRate"
+            m_learningRate = d.readFloat();
+
+            key = d.readString(); // "normalized"
+            m_normalized = d.readBool();
+
+            key = d.readString(); // "lambda"
+            m_lambda = d.readFloat();
+
+            key = d.readString(); // "initialized"
+            m_initialized = d.readBool();
+
+            // Recreate filter with restored parameters
+            m_filter = std::make_unique<dsp::core::DifferentiableFilter<float>>(m_numTaps, m_learningRate, m_lambda, m_normalized);
+
+            if (m_initialized)
+            {
+                m_filter->init(1); // Reinitialize filter
+
+                key = d.readString(); // "weights"
+                std::vector<float> weights = d.readFloatArray();
+                m_filter->setWeights(0, weights);
+            }
+
+            d.consumeToken(dsp::toon::T_OBJECT_END);
+        }
+
     private:
         void ensureScratchBuffers(size_t samplesPerChannel)
         {

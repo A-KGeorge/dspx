@@ -3,12 +3,14 @@
 #include "../IDspStage.h"
 #include "../core/RmsFilter.h"
 #include "../utils/SimdOps.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <stdexcept>
 #include <cmath>
 #include <string>
 #include <algorithm>
-#include <numeric> // For std::accumulate
+#include <numeric>  // For std::accumulate
+#include <iostream> // For optional debug logging
 
 namespace dsp::adapters
 {
@@ -173,6 +175,94 @@ namespace dsp::adapters
             for (auto &filter : m_filters)
             {
                 filter.clear();
+            }
+        }
+
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            // Serialize mode
+            s.writeString(m_mode == RmsMode::Moving ? "moving" : "batch");
+
+            if (m_mode == RmsMode::Moving)
+            {
+                // Serialize window configuration
+                s.writeInt32(static_cast<int32_t>(m_window_size));
+                s.writeDouble(m_window_duration_ms);
+                s.writeBool(m_is_initialized);
+
+                // Serialize filter states
+                s.writeInt32(static_cast<int32_t>(m_filters.size()));
+                for (const auto &filter : m_filters)
+                {
+                    auto [bufferData, runningSumOfSquares] = filter.getState();
+                    s.writeFloatArray(bufferData); // CRITICAL: Direct binary copy
+                    s.writeFloat(runningSumOfSquares);
+                }
+            }
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            // Deserialize and validate mode
+            std::string modeStr = d.readString();
+            RmsMode newMode = (modeStr == "moving") ? RmsMode::Moving : RmsMode::Batch;
+
+            if (newMode != m_mode)
+            {
+                throw std::runtime_error("RMS TOON load: mode mismatch");
+            }
+
+            if (m_mode == RmsMode::Moving)
+            {
+                // Deserialize window configuration
+                int32_t windowSize = d.readInt32();
+                if (windowSize != static_cast<int32_t>(m_window_size))
+                {
+                    throw std::runtime_error("RMS TOON load: window size mismatch");
+                }
+
+                m_window_duration_ms = d.readDouble(); // restore duration
+                m_is_initialized = d.readBool();       // restore init flag
+
+                // Deserialize filter states
+                int32_t numChannels = d.readInt32();
+                m_filters.clear();
+                for (int32_t i = 0; i < numChannels; ++i)
+                {
+                    // Create filter with correct window size (time-aware detection happens at runtime)
+                    // preserve time-aware vs size-based based on restored flags
+                    if (m_window_duration_ms > 0.0)
+                    {
+                        m_filters.emplace_back(m_window_size, m_window_duration_ms);
+                    }
+                    else
+                    {
+                        m_filters.emplace_back(m_window_size);
+                    }
+
+                    // Restore state
+                    std::vector<float> bufferData = d.readFloatArray();
+                    float runningSumOfSquares = d.readFloat();
+
+                    m_filters[i].setState(bufferData, runningSumOfSquares);
+                }
+
+// Debug: emit simple checksum to verify restored state
+#ifdef _WIN32
+                if (std::getenv("DSPX_DEBUG_TOON") != nullptr)
+                {
+                    double sum0 = 0.0;
+                    if (!m_filters.empty())
+                    {
+                        auto st = m_filters[0].getState();
+                        for (float v : st.first)
+                            sum0 += v;
+                    }
+                    std::cout << "[TOON] RMS restored: channels=" << numChannels
+                              << ", win=" << m_window_size
+                              << ", sum(ch0)=" << sum0 << std::endl;
+                }
+#endif
             }
         }
 

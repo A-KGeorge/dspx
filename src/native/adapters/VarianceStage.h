@@ -2,6 +2,7 @@
 
 #include "../IDspStage.h"
 #include "../core/MovingVarianceFilter.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <string>
 #include <stdexcept>
@@ -187,6 +188,64 @@ namespace dsp::adapters
             for (auto &filter : m_filters)
             {
                 filter.clear();
+            }
+        }
+
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeString(m_mode == VarianceMode::Moving ? "moving" : "batch");
+
+            if (m_mode == VarianceMode::Moving)
+            {
+                s.writeInt32(static_cast<int32_t>(m_window_size));
+                s.writeDouble(m_window_duration_ms);
+                s.writeBool(m_is_initialized);
+
+                s.writeInt32(static_cast<int32_t>(m_filters.size()));
+                for (const auto &filter : m_filters)
+                {
+                    auto [bufferData, sums] = filter.getState();
+                    auto [runningSum, runningSumOfSquares] = sums;
+                    s.writeFloatArray(bufferData);
+                    s.writeFloat(runningSum);
+                    s.writeFloat(runningSumOfSquares);
+                }
+            }
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            std::string modeStr = d.readString();
+            VarianceMode newMode = (modeStr == "moving") ? VarianceMode::Moving : VarianceMode::Batch;
+
+            if (newMode != m_mode)
+            {
+                throw std::runtime_error("Variance TOON load: mode mismatch");
+            }
+
+            if (m_mode == VarianceMode::Moving)
+            {
+                int32_t windowSize = d.readInt32();
+                if (windowSize != static_cast<int32_t>(m_window_size))
+                {
+                    throw std::runtime_error("Variance TOON load: window size mismatch");
+                }
+
+                d.readDouble(); // window_duration_ms
+                d.readBool();   // is_initialized
+
+                int32_t numChannels = d.readInt32();
+                m_filters.clear();
+                for (int32_t i = 0; i < numChannels; ++i)
+                {
+                    m_filters.emplace_back(m_window_size);
+
+                    std::vector<float> bufferData = d.readFloatArray();
+                    float runningSum = d.readFloat();
+                    float runningSumOfSquares = d.readFloat();
+
+                    m_filters[i].setState(bufferData, runningSum, runningSumOfSquares);
+                }
             }
         }
 

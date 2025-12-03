@@ -1,5 +1,6 @@
 #include "FilterStage.h"
 #include <stdexcept>
+#include <iostream> // For optional debug logging
 
 namespace dsp::adapters
 {
@@ -301,6 +302,165 @@ namespace dsp::adapters
                 }
             }
         }
+    }
+
+    void FilterStage::serializeToon(dsp::toon::Serializer &s) const
+    {
+        // Serialize filter type
+        s.writeString(m_isFir ? "fir" : "iir");
+
+        // Serialize coefficients
+        s.writeInt32(static_cast<int32_t>(m_bCoeffs.size()));
+        for (double coeff : m_bCoeffs)
+        {
+            s.writeDouble(coeff);
+        }
+
+        s.writeInt32(static_cast<int32_t>(m_aCoeffs.size()));
+        for (double coeff : m_aCoeffs)
+        {
+            s.writeDouble(coeff);
+        }
+
+        // Serialize filter states
+        if (m_isFir)
+        {
+            s.writeInt32(static_cast<int32_t>(m_firFilters.size()));
+            for (const auto &filter : m_firFilters)
+            {
+                if (filter)
+                {
+                    auto [stateBuffer, stateIndex] = filter->getState();
+                    s.writeFloatArray(stateBuffer);
+                    s.writeInt32(static_cast<int32_t>(stateIndex));
+                }
+                else
+                {
+                    s.writeInt32(0); // Empty state buffer size
+                    s.writeInt32(0); // stateIndex
+                }
+            }
+        }
+        else // IIR
+        {
+            s.writeInt32(static_cast<int32_t>(m_iirFilters.size()));
+            for (const auto &filter : m_iirFilters)
+            {
+                if (filter)
+                {
+                    auto [xState, yState] = filter->getState();
+                    s.writeFloatArray(xState);
+                    s.writeFloatArray(yState);
+                }
+                else
+                {
+                    s.writeInt32(0); // Empty xState size
+                    s.writeInt32(0); // Empty yState size
+                }
+            }
+        }
+    }
+
+    void FilterStage::deserializeToon(dsp::toon::Deserializer &d)
+    {
+        // Deserialize filter type
+        std::string filterType = d.readString();
+        bool isFir = (filterType == "fir");
+
+        if (isFir != m_isFir)
+        {
+            throw std::runtime_error("FilterStage TOON load: filter type mismatch");
+        }
+
+        // Deserialize and validate coefficients
+        int32_t bSize = d.readInt32();
+        if (bSize != static_cast<int32_t>(m_bCoeffs.size()))
+        {
+            throw std::runtime_error("FilterStage TOON load: bCoeffs size mismatch");
+        }
+        for (int32_t i = 0; i < bSize; ++i)
+        {
+            d.readDouble(); // Skip validation for now
+        }
+
+        int32_t aSize = d.readInt32();
+        if (aSize != static_cast<int32_t>(m_aCoeffs.size()))
+        {
+            throw std::runtime_error("FilterStage TOON load: aCoeffs size mismatch");
+        }
+        for (int32_t i = 0; i < aSize; ++i)
+        {
+            d.readDouble(); // Skip validation for now
+        }
+
+        // Deserialize filter states
+        int32_t numChannels = d.readInt32();
+        initializeFilters(numChannels);
+
+        if (m_isFir)
+        {
+            for (int32_t i = 0; i < numChannels && i < static_cast<int32_t>(m_firFilters.size()); ++i)
+            {
+                std::vector<float> stateBuffer = d.readFloatArray();
+                int32_t stateIndex = d.readInt32();
+
+                if (m_firFilters[i] && !stateBuffer.empty())
+                {
+                    m_firFilters[i]->setState(stateBuffer, static_cast<size_t>(stateIndex));
+                }
+            }
+        }
+        else // IIR
+        {
+            for (int32_t i = 0; i < numChannels && i < static_cast<int32_t>(m_iirFilters.size()); ++i)
+            {
+                std::vector<float> xState = d.readFloatArray();
+                std::vector<float> yState = d.readFloatArray();
+
+                if (m_iirFilters[i] && !xState.empty())
+                {
+                    m_iirFilters[i]->setState(xState, yState);
+                }
+            }
+        }
+
+// Debug: emit simple checksum to verify restored state
+#ifdef _WIN32
+        if (std::getenv("DSPX_DEBUG_TOON") != nullptr)
+        {
+            if (m_isFir)
+            {
+                double sum0 = 0.0;
+                if (!m_firFilters.empty())
+                {
+                    auto st = m_firFilters[0]->getState();
+                    for (float v : st.first)
+                        sum0 += v;
+                }
+                std::cout << "[TOON] FIR restored: channels=" << numChannels
+                          << ", bSize=" << m_bCoeffs.size()
+                          << ", aSize=" << m_aCoeffs.size()
+                          << ", sum(state0)=" << sum0 << std::endl;
+            }
+            else
+            {
+                double sumx0 = 0.0, sumy0 = 0.0;
+                if (!m_iirFilters.empty())
+                {
+                    auto st = m_iirFilters[0]->getState();
+                    for (float v : st.first)
+                        sumx0 += v;
+                    for (float v : st.second)
+                        sumy0 += v;
+                }
+                std::cout << "[TOON] IIR restored: channels=" << numChannels
+                          << ", bSize=" << m_bCoeffs.size()
+                          << ", aSize=" << m_aCoeffs.size()
+                          << ", sum(x0)=" << sumx0
+                          << ", sum(y0)=" << sumy0 << std::endl;
+            }
+        }
+#endif
     }
 
 } // namespace dsp::adapters

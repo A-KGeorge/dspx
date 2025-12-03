@@ -1,4 +1,4 @@
-import { describe, test, beforeEach } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -9,6 +9,10 @@ describe("Willison Amplitude (WAMP)", () => {
 
   beforeEach(() => {
     pipeline = createDspPipeline();
+  });
+
+  afterEach(() => {
+    pipeline.dispose();
   });
 
   test("should count amplitude changes exceeding threshold in sliding window", async () => {
@@ -145,15 +149,19 @@ describe("Willison Amplitude (WAMP)", () => {
     const state = await pipeline.saveState();
 
     const newPipeline = createDspPipeline();
-    newPipeline.WillisonAmplitude({ windowSize: 3, threshold: 1.0 }); // Must match original
-    await newPipeline.loadState(state);
+    try {
+      newPipeline.WillisonAmplitude({ windowSize: 3, threshold: 1.0 }); // Must match original
+      await newPipeline.loadState(state);
 
-    const buffer2 = new Float32Array([5, 6]);
-    await newPipeline.process(buffer2, DEFAULT_OPTIONS);
+      const buffer2 = new Float32Array([5, 6]);
+      await newPipeline.process(buffer2, DEFAULT_OPTIONS);
 
-    // Should continue from where we left off
-    assert.ok(buffer2[0] > 0); // |5-3| = 2 > 1.0
-    assert.ok(buffer2[1] > 0); // |6-5| = 1 > 1.0 (barely)
+      // Should continue from where we left off
+      assert.ok(buffer2[0] > 0); // |5-3| = 2 > 1.0
+      assert.ok(buffer2[1] > 0); // |6-5| = 1 > 1.0 (barely)
+    } finally {
+      newPipeline.dispose();
+    }
   });
 
   test("should throw error for invalid window size", () => {

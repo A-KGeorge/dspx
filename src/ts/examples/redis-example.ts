@@ -29,11 +29,7 @@ async function redisExample(startFresh = false) {
     console.log("State cleared\n");
   }
 
-  const pipeline = createDspPipeline({
-    redisHost: "localhost",
-    redisPort: 6379,
-    stateKey: stateKey,
-  });
+  const pipeline = createDspPipeline();
 
   // 3. Build the pipeline
   pipeline.MovingAverage({ mode: "moving", windowSize: 3 });
@@ -71,11 +67,7 @@ async function redisExample(startFresh = false) {
   console.log("\n--- Simulating restart ---");
 
   // 8. Create new pipeline and restore state
-  const pipeline2 = createDspPipeline({
-    redisHost: "localhost",
-    redisPort: 6379,
-    stateKey: stateKey,
-  });
+  const pipeline2 = createDspPipeline();
 
   pipeline2.MovingAverage({ mode: "moving", windowSize: 3 });
 
@@ -130,11 +122,7 @@ async function streamingExample(startFresh = false) {
   }
 
   // Create pipeline
-  const pipeline = createDspPipeline({
-    redisHost: "localhost",
-    redisPort: 6379,
-    stateKey: stateKey,
-  });
+  const pipeline = createDspPipeline();
 
   pipeline.MovingAverage({ mode: "moving", windowSize: 5 });
 

@@ -2,12 +2,14 @@
 
 #include "../IDspStage.h"
 #include "../core/MovingZScoreFilter.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <string>
 #include <stdexcept>
 #include <cmath>
 #include <numeric>   // For std::accumulate
 #include <algorithm> // For std::max
+#include <iostream>  // For optional debug logging
 
 namespace dsp::adapters
 {
@@ -192,6 +194,87 @@ namespace dsp::adapters
             for (auto &filter : m_filters)
             {
                 filter.clear();
+            }
+        }
+
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeString(m_mode == ZScoreNormalizeMode::Moving ? "moving" : "batch");
+
+            if (m_mode == ZScoreNormalizeMode::Moving)
+            {
+                s.writeInt32(static_cast<int32_t>(m_window_size));
+                s.writeDouble(m_window_duration_ms);
+                s.writeBool(m_is_initialized);
+                s.writeFloat(m_epsilon);
+
+                s.writeInt32(static_cast<int32_t>(m_filters.size()));
+                for (const auto &filter : m_filters)
+                {
+                    auto [bufferData, sums] = filter.getState();
+                    auto [runningSum, runningSumOfSquares] = sums;
+                    s.writeFloatArray(bufferData);
+                    s.writeFloat(runningSum);
+                    s.writeFloat(runningSumOfSquares);
+                    s.writeFloat(m_epsilon); // Store epsilon explicitly
+                }
+            }
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            std::string modeStr = d.readString();
+            ZScoreNormalizeMode newMode = (modeStr == "moving") ? ZScoreNormalizeMode::Moving : ZScoreNormalizeMode::Batch;
+
+            if (newMode != m_mode)
+            {
+                throw std::runtime_error("ZScore TOON load: mode mismatch");
+            }
+
+            if (m_mode == ZScoreNormalizeMode::Moving)
+            {
+                int32_t windowSize = d.readInt32();
+                if (windowSize != static_cast<int32_t>(m_window_size))
+                {
+                    throw std::runtime_error("ZScore TOON load: window size mismatch");
+                }
+
+                m_window_duration_ms = d.readDouble(); // restore duration
+                m_is_initialized = d.readBool();       // restore init flag
+                m_epsilon = d.readFloat();             // restore epsilon
+
+                int32_t numChannels = d.readInt32();
+                m_filters.clear();
+                for (int32_t i = 0; i < numChannels; ++i)
+                {
+                    m_filters.emplace_back(m_window_size, m_epsilon);
+
+                    std::vector<float> bufferData = d.readFloatArray();
+                    float runningSum = d.readFloat();
+                    float runningSumOfSquares = d.readFloat();
+                    d.readFloat(); // epsilon (already restored)
+
+                    // setState takes (buffer, sum, sumOfSquares) - 3 separate params
+                    m_filters[i].setState(bufferData, runningSum, runningSumOfSquares);
+                }
+
+// Debug: emit simple checksum to verify restored state
+#ifdef _WIN32
+                if (std::getenv("DSPX_DEBUG_TOON") != nullptr)
+                {
+                    double sum0 = 0.0;
+                    if (!m_filters.empty())
+                    {
+                        auto st = m_filters[0].getState();
+                        for (float v : st.first)
+                            sum0 += v;
+                    }
+                    std::cout << "[TOON] ZScore restored: channels=" << numChannels
+                              << ", win=" << m_window_size
+                              << ", eps=" << m_epsilon
+                              << ", sum(ch0)=" << sum0 << std::endl;
+                }
+#endif
             }
         }
 

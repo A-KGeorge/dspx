@@ -177,6 +177,125 @@ namespace dsp::adapters
             }
         }
 
+        // TOON Binary Serialization - CRITICAL OPTIMIZATION for large buffers
+        void serializeToon(dsp::toon::Serializer &serializer) const override
+        {
+            serializer.startObject();
+
+            // 1. Mode
+            serializer.writeString("mode");
+            serializer.writeString((m_mode == AverageMode::Moving) ? "moving" : "batch");
+
+            if (m_mode == AverageMode::Moving)
+            {
+                // 2. Config
+                serializer.writeString("windowSize");
+                serializer.writeInt32(static_cast<int32_t>(m_window_size));
+
+                serializer.writeString("windowDuration");
+                serializer.writeDouble(m_window_duration_ms);
+
+                serializer.writeString("initialized");
+                serializer.writeBool(m_is_initialized);
+
+                // 3. Channels - Zero-copy-like binary arrays
+                serializer.writeString("channels");
+                serializer.startArray();
+
+                for (const auto &filter : m_filters)
+                {
+                    auto [bufferData, runningSum] = filter.getState();
+
+                    serializer.startObject();
+
+                    // CRITICAL: Direct binary copy of float buffer (not text!)
+                    serializer.writeString("buffer");
+                    serializer.writeFloatArray(bufferData);
+
+                    serializer.writeString("sum");
+                    serializer.writeFloat(runningSum);
+
+                    serializer.endObject();
+                }
+                serializer.endArray();
+            }
+
+            serializer.endObject();
+        }
+
+        // TOON Binary Deserialization - CRITICAL OPTIMIZATION for large buffers
+        void deserializeToon(dsp::toon::Deserializer &deserializer) override
+        {
+            deserializer.consumeToken(dsp::toon::T_OBJECT_START);
+
+            // 1. Mode
+            std::string key = deserializer.readString(); // "mode"
+            std::string modeStr = deserializer.readString();
+
+            AverageMode newMode = (modeStr == "moving") ? AverageMode::Moving : AverageMode::Batch;
+            if (newMode != m_mode)
+            {
+                throw std::runtime_error("MovingAverage mode mismatch during TOON deserialization");
+            }
+
+            if (modeStr == "moving")
+            {
+                // 2. Config
+                key = deserializer.readString(); // "windowSize"
+                int32_t windowSize = deserializer.readInt32();
+
+                key = deserializer.readString(); // "windowDuration"
+                double windowDuration = deserializer.readDouble();
+
+                key = deserializer.readString(); // "initialized"
+                bool initialized = deserializer.readBool();
+
+                // Validate window size
+                if (windowSize != static_cast<int32_t>(m_window_size))
+                {
+                    throw std::runtime_error("MovingAverage window size mismatch during TOON deserialization");
+                }
+
+                m_window_duration_ms = windowDuration;
+                m_is_initialized = initialized;
+
+                // 3. Channels
+                key = deserializer.readString(); // "channels"
+                deserializer.consumeToken(dsp::toon::T_ARRAY_START);
+
+                m_filters.clear();
+
+                while (deserializer.peekToken() != dsp::toon::T_ARRAY_END)
+                {
+                    deserializer.consumeToken(dsp::toon::T_OBJECT_START);
+
+                    // Buffer - CRITICAL: Direct binary memcpy (not parsing text!)
+                    deserializer.readString(); // "buffer"
+                    std::vector<float> bufferData = deserializer.readFloatArray();
+
+                    // Sum
+                    deserializer.readString(); // "sum"
+                    float runningSum = deserializer.readFloat();
+
+                    // Reconstruct filter with time-aware support
+                    if (m_window_duration_ms > 0.0)
+                    {
+                        m_filters.emplace_back(m_window_size, m_window_duration_ms);
+                    }
+                    else
+                    {
+                        m_filters.emplace_back(m_window_size);
+                    }
+                    m_filters.back().setState(bufferData, runningSum);
+
+                    deserializer.consumeToken(dsp::toon::T_OBJECT_END);
+                }
+                deserializer.consumeToken(dsp::toon::T_ARRAY_END);
+            }
+
+            deserializer.consumeToken(dsp::toon::T_OBJECT_END);
+        }
+
     private:
         /**
          * @brief Statelessly calculates the average for each channel

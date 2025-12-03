@@ -47,8 +47,6 @@ export {
   createDatadogHandler,
   createConsoleHandler,
   createMockHandler,
-  createKafkaProducerHandler,
-  createKafkaConsumer,
   Logger,
   JSONFormatter,
   TextFormatter,
@@ -63,8 +61,6 @@ export {
   type LoggerMetrics,
   type SamplingConfig,
   type LoggerOptions,
-  type KafkaProducerConfig,
-  type KafkaConsumerConfig,
 } from "./backends.js";
 export {
   DriftDetector,
@@ -119,7 +115,6 @@ export type {
 export type {
   ProcessOptions,
   MovingAverageParams,
-  RedisConfig,
   RmsParams,
   RectifyParams,
   VarianceParams,

@@ -383,40 +383,113 @@ export function crossCorrelation(
  *
  * @namespace DspUtils
  */
-export const DspUtils = {
+export class DspUtils {
   /**
    * Computes the dot product of two vectors using SIMD-accelerated native code.
    * @see {@link dotProduct} for detailed documentation
    */
-  dotProduct,
+  static dotProduct = dotProduct;
 
   /**
    * Computes the sum of array elements using SIMD-accelerated native code.
    * @see {@link sum} for detailed documentation
    */
-  sum,
+  static sum = sum;
 
   /**
    * Computes the sum of squared elements using SIMD-accelerated native code.
    * @see {@link sumOfSquares} for detailed documentation
    */
-  sumOfSquares,
+  static sumOfSquares = sumOfSquares;
 
   /**
    * Removes linear trend or constant offset from signals.
    * @see {@link detrend} for detailed documentation
    */
-  detrend,
+  static detrend = detrend;
 
   /**
    * Computes FFT-based autocorrelation for pitch and periodicity detection.
    * @see {@link autocorrelation} for detailed documentation
    */
-  autocorrelation,
+  static autocorrelation = autocorrelation;
 
   /**
    * Computes FFT-based cross-correlation for time delay estimation and pattern matching.
    * @see {@link crossCorrelation} for detailed documentation
    */
-  crossCorrelation,
-};
+  static crossCorrelation = crossCorrelation;
+
+  /**
+   * Converts an array of planar (separate) Float32Array channels into a single interleaved Float32Array.
+   * This version uses the high-performance native C++ binding.
+   *
+   * @param planar an array of Float32Arrays, where each array represents a single channel.
+   * @returns A single Float32Array with samples interleaved.
+   * @throws An error if the input is not a valid array of Float32Arrays or if channel lengths are inconsistent.
+   */
+  public static interleave(planar: Float32Array[]): Float32Array {
+    if (!Array.isArray(planar)) {
+      throw new Error("Input must be an array of Float32Arrays.");
+    }
+    // Delegate to the native addon for high-performance interleaving
+    return DspAddon.interleave(planar);
+  }
+
+  /**
+   * Converts a single interleaved Float32Array into an array of planar (separate) Float32Array channels.
+   * This version uses the high-performance native C++ binding.
+   *
+   * @param interleaved The interleaved Float32Array.
+   * @param numChannels The number of channels to deinterleave.
+   * @returns An array of Float32Arrays, where each array is a channel.
+   * @throws An error if the interleaved array length is not divisible by the number of channels.
+   */
+  public static deinterleave(
+    interleaved: Float32Array,
+    numChannels: number
+  ): Float32Array[] {
+    if (!(interleaved instanceof Float32Array)) {
+      throw new TypeError("Input must be a Float32Array.");
+    }
+    if (typeof numChannels !== "number" || numChannels <= 0) {
+      throw new TypeError("Number of channels must be a positive number.");
+    }
+    // Delegate to the native addon for high-performance deinterleaving
+    return DspAddon.deinterleave(interleaved, numChannels);
+  }
+
+  /**
+   * Extracts a single channel from an interleaved Float32Array as a new Float32Array.
+   * This is a zero-copy view into the original buffer if possible, but currently creates a copy.
+   *
+   * @param interleaved The interleaved Float32Array.
+   * @param numChannels The total number of channels in the interleaved data.
+   * @param channelIndex The index of the channel to extract (0-based).
+   * @returns A new Float32Array containing only the data for the specified channel.
+   * @throws An error if the channel index is out of bounds.
+   */
+  public static getChannel(
+    interleaved: Float32Array,
+    numChannels: number,
+    channelIndex: number
+  ): Float32Array {
+    if (channelIndex < 0 || channelIndex >= numChannels) {
+      throw new Error("Channel index is out of bounds.");
+    }
+    if (interleaved.length % numChannels !== 0) {
+      throw new Error(
+        "Interleaved array length must be divisible by the number of channels."
+      );
+    }
+
+    const numSamples = interleaved.length / numChannels;
+    const channelData = new Float32Array(numSamples);
+
+    for (let i = 0; i < numSamples; i++) {
+      channelData[i] = interleaved[i * numChannels + channelIndex];
+    }
+
+    return channelData;
+  }
+}

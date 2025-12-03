@@ -2,6 +2,7 @@
 
 #include "../IDspStage.h"
 #include "../core/PeakDetection.h"
+#include "../utils/Toon.h"
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -140,6 +141,58 @@ namespace dsp::adapters
                     m_prev_prev_sample.push_back(prevPrevArray.Get(i).As<Napi::Number>().FloatValue());
                     m_peakCooldown.push_back(cooldownArray.Get(i).As<Napi::Number>().Int32Value());
                 }
+            }
+        }
+
+        inline void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            // Write configuration
+            s.writeFloat(m_threshold);
+            s.writeInt32(m_num_channels);
+            s.writeString(m_mode);
+            s.writeString(m_domain);
+            s.writeInt32(m_windowSize);
+            s.writeInt32(m_minPeakDistance);
+
+            // Write state (only for moving mode)
+            if (m_mode == "moving" && !m_prev_sample.empty())
+            {
+                s.writeFloatArray(m_prev_sample);
+                s.writeFloatArray(m_prev_prev_sample);
+
+                // Write peakCooldown as int array (convert to float array)
+                std::vector<float> cooldown_float(m_peakCooldown.begin(), m_peakCooldown.end());
+                s.writeFloatArray(cooldown_float);
+            }
+            else
+            {
+                // Write empty arrays
+                s.writeFloatArray(std::vector<float>());
+                s.writeFloatArray(std::vector<float>());
+                s.writeFloatArray(std::vector<float>());
+            }
+        }
+
+        inline void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            // Read configuration
+            m_threshold = d.readFloat();
+            m_num_channels = d.readInt32();
+            m_mode = d.readString();
+            m_domain = d.readString();
+            m_windowSize = d.readInt32();
+            m_minPeakDistance = d.readInt32();
+
+            // Read state arrays
+            m_prev_sample = d.readFloatArray();
+            m_prev_prev_sample = d.readFloatArray();
+
+            // Read peakCooldown (convert from float array to int)
+            std::vector<float> cooldown_float = d.readFloatArray();
+            m_peakCooldown.clear();
+            for (float val : cooldown_float)
+            {
+                m_peakCooldown.push_back(static_cast<int>(val));
             }
         }
 

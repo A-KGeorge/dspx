@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../IDspStage.h"
+#include "../utils/Toon.h"
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -9,19 +10,19 @@ namespace dsp::adapters
 {
     /**
      * @brief Clip Detection Stage - Detects when samples exceed a threshold.
-     * 
+     *
      * This stage analyzes the input signal and outputs a binary (0.0 or 1.0) indicator
      * showing where clipping occurs. This is useful for:
      * - Audio clipping detection (overload prevention)
      * - Saturation detection in ADC signals
      * - Quality control in data acquisition
-     * 
+     *
      * **Output:**
      * - 1.0 when |sample| >= threshold (clipping detected)
      * - 0.0 when |sample| < threshold (no clipping)
-     * 
+     *
      * **Processing:** Stateless, processes each sample independently
-     * 
+     *
      * @example
      * ```cpp
      * // Detect audio clipping at 0.95 (5% headroom)
@@ -75,6 +76,16 @@ namespace dsp::adapters
             {
                 m_threshold = state.Get("threshold").As<Napi::Number>().FloatValue();
             }
+        }
+
+        inline void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeFloat(m_threshold);
+        }
+
+        inline void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            m_threshold = d.readFloat();
         }
 
         void reset() override

@@ -3,6 +3,7 @@
 #include "../IDspStage.h"
 #include "../core/WaveformLengthFilter.h"
 #include "../utils/NapiUtils.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <string>
 #include <stdexcept>
@@ -104,6 +105,56 @@ namespace dsp::adapters
                 }
 
                 m_filters[i].setState(bufferData, runningSum, prevSample);
+            }
+        }
+
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeInt32(static_cast<int32_t>(m_window_size));
+            s.writeInt32(static_cast<int32_t>(m_filters.size()));
+
+            for (const auto &filter : m_filters)
+            {
+                auto state = filter.getState();
+                const auto &internalState = state.first;
+                float prevSample = state.second;
+
+                const std::vector<float> &bufferData = internalState.first;
+                double runningSum = internalState.second;
+
+                s.writeFloatArray(bufferData);
+                s.writeDouble(runningSum);
+                s.writeFloat(prevSample);
+            }
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            size_t windowSize = static_cast<size_t>(d.readInt32());
+            if (windowSize != m_window_size)
+            {
+                throw std::runtime_error("WaveformLength TOON: window size mismatch");
+            }
+
+            int32_t numChannels = d.readInt32();
+            m_filters.clear();
+            for (int32_t i = 0; i < numChannels; ++i)
+            {
+                m_filters.emplace_back(m_window_size);
+            }
+
+            for (auto &filter : m_filters)
+            {
+                std::vector<float> bufferData = d.readFloatArray();
+                double runningSum = d.readDouble();
+                float prevSample = d.readFloat();
+
+                if (!dsp::core::SumPolicy<float>::validateState(runningSum, bufferData))
+                {
+                    throw std::runtime_error("WaveformLength TOON: validation failed");
+                }
+
+                filter.setState(bufferData, runningSum, prevSample);
             }
         }
 

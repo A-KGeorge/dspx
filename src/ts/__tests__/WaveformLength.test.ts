@@ -1,4 +1,4 @@
-import { describe, test, beforeEach } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -9,6 +9,10 @@ describe("Waveform Length", () => {
 
   beforeEach(() => {
     pipeline = createDspPipeline();
+  });
+
+  afterEach(() => {
+    pipeline.dispose();
   });
 
   test("should compute waveform length for a simple signal", async () => {
@@ -119,17 +123,21 @@ describe("Waveform Length", () => {
 
     // Create new pipeline with same structure and restore state
     const newPipeline = createDspPipeline();
-    newPipeline.WaveformLength({ windowSize: 3 }); // Must match original pipeline
-    await newPipeline.loadState(state);
+    try {
+      newPipeline.WaveformLength({ windowSize: 3 }); // Must match original pipeline
+      await newPipeline.loadState(state);
 
-    // Continue processing with restored state
-    const buffer2 = new Float32Array([5, 6]);
-    await newPipeline.process(buffer2, DEFAULT_OPTIONS);
+      // Continue processing with restored state
+      const buffer2 = new Float32Array([5, 6]);
+      await newPipeline.process(buffer2, DEFAULT_OPTIONS);
 
-    // Should continue from where we left off
-    const tolerance = 0.00001;
-    assert.ok(Math.abs(buffer2[0] - 5) < tolerance); // |5-3| = 2, window WL = [|4-3|+|5-3|] = 1+2 = 3, rolling WL
-    assert.ok(Math.abs(buffer2[1] - 4) < tolerance); // |6-5| = 1, window WL = [|5-3|+|6-5|] = 2+1 = 3, but output is 4
+      // Should continue from where we left off
+      const tolerance = 0.00001;
+      assert.ok(Math.abs(buffer2[0] - 5) < tolerance); // |5-3| = 2, window WL = [|4-3|+|5-3|] = 1+2 = 3, rolling WL
+      assert.ok(Math.abs(buffer2[1] - 4) < tolerance); // |6-5| = 1, window WL = [|5-3|+|6-5|] = 2+1 = 3, but output is 4
+    } finally {
+      newPipeline.dispose();
+    }
   });
 
   test("should throw error for invalid window size", () => {

@@ -2,6 +2,7 @@
 
 #include "../IDspStage.h"
 #include "../core/MovingAbsoluteValueFilter.h" // Include the new core filter
+#include "../utils/Toon.h"
 #include <vector>
 #include <stdexcept>
 #include <cmath>
@@ -168,10 +169,85 @@ namespace dsp::adapters
             }
         }
 
+        inline void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            // Write mode
+            s.writeInt32(static_cast<int32_t>(m_mode));
+
+            // Write configuration parameters
+            s.writeInt32(static_cast<int32_t>(m_window_size));
+            s.writeFloat(static_cast<float>(m_window_duration_ms));
+            s.writeBool(m_is_initialized);
+
+            // Write number of channels and filter states
+            s.writeInt32(static_cast<int32_t>(m_filters.size()));
+
+            // For Moving mode, serialize each filter's state
+            if (m_mode == MavMode::Moving)
+            {
+                for (const auto &filter : m_filters)
+                {
+                    auto [bufferData, runningSum] = filter.getState();
+                    s.writeFloatArray(bufferData);
+                    s.writeFloat(runningSum);
+                }
+            }
+        }
+
+        inline void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            // Read mode
+            int32_t mode_int = d.readInt32();
+            if (mode_int < 0 || mode_int > 1)
+                throw std::runtime_error("Invalid mode in MeanAbsoluteValueStage deserialization");
+            m_mode = static_cast<MavMode>(mode_int);
+
+            // Read configuration parameters
+            int32_t window_size = d.readInt32();
+            if (window_size < 0)
+                throw std::runtime_error("Invalid window_size in MeanAbsoluteValueStage deserialization");
+            m_window_size = static_cast<size_t>(window_size);
+
+            m_window_duration_ms = static_cast<double>(d.readFloat());
+            m_is_initialized = d.readBool();
+
+            // Read number of channels
+            int32_t num_channels = d.readInt32();
+            if (num_channels < 0)
+                throw std::runtime_error("Invalid num_channels in MeanAbsoluteValueStage deserialization");
+
+            // Reconstruct filters
+            m_filters.clear();
+
+            if (m_mode == MavMode::Moving)
+            {
+                for (int32_t i = 0; i < num_channels; ++i)
+                {
+                    // Read buffer data
+                    std::vector<float> bufferData = d.readFloatArray();
+
+                    // Read running sum
+                    float runningSum = d.readFloat();
+
+                    // Create filter and restore state
+                    if (m_window_duration_ms > 0.0)
+                    {
+                        m_filters.emplace_back(m_window_size, m_window_duration_ms);
+                    }
+                    else
+                    {
+                        m_filters.emplace_back(m_window_size);
+                    }
+                    m_filters.back().setState(bufferData, runningSum);
+                }
+            }
+        }
+
         // Reset all filters to initial state
         void reset() override
         {
             for (auto &filter : m_filters)
+
             {
                 filter.clear();
             }

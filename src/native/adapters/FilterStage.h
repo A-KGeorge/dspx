@@ -3,6 +3,7 @@
 #include "../IDspStage.h"
 #include "../core/IirFilter.h"
 #include "../core/FirFilter.h"
+#include "../utils/Toon.h"
 #include <memory>
 #include <vector>
 #include <string>
@@ -22,6 +23,9 @@ namespace dsp::adapters
 
         Napi::Object serializeState(Napi::Env env) const override;
         void deserializeState(const Napi::Object &state) override;
+
+        void serializeToon(dsp::toon::Serializer &serializer) const override;
+        void deserializeToon(dsp::toon::Deserializer &deserializer) override;
 
     private:
         void initializeFilters(int numChannels);

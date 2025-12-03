@@ -3,6 +3,7 @@
 #include "../IDspStage.h"
 #include "../core/SscFilter.h"
 #include "../utils/NapiUtils.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <string>
 #include <stdexcept>
@@ -109,6 +110,70 @@ namespace dsp::adapters
                 }
 
                 m_filters[i].setState(bufferData, runningCount, filterState);
+            }
+        }
+
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeInt32(static_cast<int32_t>(m_window_size));
+            s.writeFloat(m_threshold);
+            s.writeInt32(static_cast<int32_t>(m_filters.size()));
+
+            for (const auto &filter : m_filters)
+            {
+                auto [internalState, filterState] = filter.getState();
+                auto [bufferData, runningCount] = internalState;
+
+                // Serialize bool vector as byte array
+                s.writeInt32(static_cast<int32_t>(bufferData.size()));
+                for (bool b : bufferData)
+                {
+                    s.writeBool(b);
+                }
+                s.writeInt32(static_cast<int32_t>(runningCount));
+                s.writeFloat(filterState.sample_minus_1);
+                s.writeFloat(filterState.sample_minus_2);
+                s.writeInt32(filterState.init_count);
+            }
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            size_t windowSize = static_cast<size_t>(d.readInt32());
+            float threshold = d.readFloat();
+            if (windowSize != m_window_size || threshold != m_threshold)
+            {
+                throw std::runtime_error("SSC TOON: parameter mismatch");
+            }
+
+            int32_t numChannels = d.readInt32();
+            m_filters.clear();
+            for (int32_t i = 0; i < numChannels; ++i)
+            {
+                m_filters.emplace_back(m_window_size, m_threshold);
+            }
+
+            for (auto &filter : m_filters)
+            {
+                int32_t bufSize = d.readInt32();
+                std::vector<bool> bufferData(bufSize);
+                for (int32_t j = 0; j < bufSize; ++j)
+                {
+                    bufferData[j] = d.readBool();
+                }
+                size_t runningCount = static_cast<size_t>(d.readInt32());
+
+                dsp::core::SscFilter<float>::SscFilterState filterState;
+                filterState.sample_minus_1 = d.readFloat();
+                filterState.sample_minus_2 = d.readFloat();
+                filterState.init_count = d.readInt32();
+
+                if (!dsp::core::CounterPolicy::validateState(runningCount, bufferData))
+                {
+                    throw std::runtime_error("SSC TOON: validation failed");
+                }
+
+                filter.setState(bufferData, runningCount, filterState);
             }
         }
 

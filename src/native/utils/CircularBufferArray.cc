@@ -240,7 +240,8 @@ size_t CircularBufferArray<T>::expireOld(double currentTimestamp)
     double cutoff_time = currentTimestamp - windowDuration_ms;
 
     // Remove samples from tail while they're older than cutoff
-    while (count > 0 && timestamps[tail] < cutoff_time)
+    // FIX: changed < to <= to correctly expire samples at the cutoff and avoid an additional windowduration delay
+    while (count > 0 && timestamps[tail] <= cutoff_time)
     {
         tail = (tail + 1) % capacity;
         --count;

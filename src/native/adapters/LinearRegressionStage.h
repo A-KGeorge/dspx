@@ -3,6 +3,7 @@
 
 #include "../IDspStage.h"
 #include "../utils/SimdOps.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <cmath>
 #include <stdexcept>
@@ -318,6 +319,45 @@ namespace dsp
 
                     m_writeIndices[ch] = static_cast<size_t>(channelState.Get("writeIndex").ToNumber().DoubleValue());
                     m_sampleCounts[ch] = static_cast<size_t>(channelState.Get("sampleCount").ToNumber().DoubleValue());
+                }
+            }
+
+            inline void serializeToon(dsp::toon::Serializer &s) const override
+            {
+                // Write configuration
+                s.writeInt32(static_cast<int32_t>(m_windowSize));
+                s.writeInt32(static_cast<int32_t>(m_numChannels));
+
+                // Write per-channel state
+                for (size_t ch = 0; ch < m_numChannels; ++ch)
+                {
+                    s.writeFloatArray(m_buffers[ch]);
+                    s.writeInt32(static_cast<int32_t>(m_writeIndices[ch]));
+                    s.writeInt32(static_cast<int32_t>(m_sampleCounts[ch]));
+                }
+            }
+
+            inline void deserializeToon(dsp::toon::Deserializer &d) override
+            {
+                // Read configuration
+                int32_t windowSize = d.readInt32();
+                if (windowSize < 2)
+                    throw std::runtime_error("Invalid windowSize in LinearRegressionStage deserialization");
+                if (static_cast<size_t>(windowSize) != m_windowSize)
+                    throw std::runtime_error("Window size mismatch in LinearRegressionStage deserialization");
+
+                int32_t numChannels = d.readInt32();
+                if (numChannels < 0)
+                    throw std::runtime_error("Invalid numChannels in LinearRegressionStage deserialization");
+
+                init(static_cast<size_t>(numChannels));
+
+                // Read per-channel state
+                for (size_t ch = 0; ch < m_numChannels; ++ch)
+                {
+                    m_buffers[ch] = d.readFloatArray();
+                    m_writeIndices[ch] = static_cast<size_t>(d.readInt32());
+                    m_sampleCounts[ch] = static_cast<size_t>(d.readInt32());
                 }
             }
 

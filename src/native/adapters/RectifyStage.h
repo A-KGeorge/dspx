@@ -1,6 +1,7 @@
 #pragma once
 #include "../IDspStage.h"
 #include "../utils/SimdOps.h"
+#include "../utils/Toon.h"
 #include <cmath>
 #include <stdexcept>
 
@@ -78,6 +79,19 @@ namespace dsp::adapters
                 m_mode = RectifyMode::HalfWave;
             else
                 throw std::runtime_error("Invalid rectify mode");
+        }
+
+        inline void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeInt32(static_cast<int32_t>(m_mode));
+        }
+
+        inline void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            int32_t mode_int = d.readInt32();
+            if (mode_int < 0 || mode_int > 1)
+                throw std::runtime_error("Invalid mode in RectifyStage deserialization");
+            m_mode = static_cast<RectifyMode>(mode_int);
         }
 
         void reset() override {} // No internal buffers

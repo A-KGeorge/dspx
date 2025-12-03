@@ -1,6 +1,7 @@
 #pragma once
 #include <napi.h>
 #include <cstring> // for std::memcpy
+#include "utils/Toon.h"
 
 namespace dsp
 {
@@ -97,6 +98,29 @@ namespace dsp
          * @param state The Napi::Object containing the serialized state.
          */
         virtual void deserializeState(const Napi::Object &state) = 0;
+
+        /**
+         * @brief Serializes internal state to the efficient TOON binary format.
+         * Default implementation throws, forcing derived classes to implement it
+         * if TOON support is required.
+         *
+         * @param serializer The TOON serializer to write binary data to.
+         */
+        virtual void serializeToon(toon::Serializer &serializer) const
+        {
+            // Fallback: throw if not implemented for a specific stage
+            throw std::runtime_error("TOON serialization not implemented for this stage type");
+        }
+
+        /**
+         * @brief Deserializes internal state from TOON binary format.
+         *
+         * @param deserializer The TOON deserializer to read binary data from.
+         */
+        virtual void deserializeToon(toon::Deserializer &deserializer)
+        {
+            throw std::runtime_error("TOON deserialization not implemented for this stage type");
+        }
 
         /**
          * @brief Resets the stage's internal state to initial values.

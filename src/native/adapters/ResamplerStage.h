@@ -8,6 +8,7 @@
 #pragma once
 
 #include "../IDspStage.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <cmath>
 #include <stdexcept>
@@ -184,6 +185,72 @@ namespace dsp
                 {
                     phaseAccumulators_[ch] = phaseAccumulatorsArray.Get(ch).As<Napi::Number>().Uint32Value();
                 }
+            }
+        }
+
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeInt32(upFactor_);
+            s.writeInt32(downFactor_);
+            s.writeInt32(filterOrder_);
+            s.writeDouble(sampleRate_);
+            s.writeInt32(numChannels_);
+            s.writeInt32(static_cast<int32_t>(phaseAccumulator_));
+
+            // Serialize state buffers for each channel
+            for (const auto &buf : stateBuffers_)
+            {
+                s.writeFloatArray(buf);
+            }
+
+            // Serialize state indices
+            for (size_t idx : stateIndices_)
+            {
+                s.writeInt32(static_cast<int32_t>(idx));
+            }
+
+            // Serialize phase accumulators
+            for (size_t pa : phaseAccumulators_)
+            {
+                s.writeInt32(static_cast<int32_t>(pa));
+            }
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            int32_t upF = d.readInt32();
+            int32_t downF = d.readInt32();
+            int32_t order = d.readInt32();
+            double sr = d.readDouble();
+            int32_t nCh = d.readInt32();
+            phaseAccumulator_ = static_cast<size_t>(d.readInt32());
+
+            if (upF != upFactor_ || downF != downFactor_ || order != filterOrder_)
+            {
+                throw std::runtime_error("Resampler TOON: parameter mismatch");
+            }
+
+            if (nCh != numChannels_)
+            {
+                initializeStateBuffers(nCh);
+            }
+
+            // Deserialize state buffers
+            for (auto &buf : stateBuffers_)
+            {
+                buf = d.readFloatArray();
+            }
+
+            // Deserialize state indices
+            for (size_t &idx : stateIndices_)
+            {
+                idx = static_cast<size_t>(d.readInt32());
+            }
+
+            // Deserialize phase accumulators
+            for (size_t &pa : phaseAccumulators_)
+            {
+                pa = static_cast<size_t>(d.readInt32());
             }
         }
 

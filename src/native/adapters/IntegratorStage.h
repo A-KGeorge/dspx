@@ -2,6 +2,7 @@
 #define INTEGRATOR_STAGE_H
 
 #include "../IDspStage.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <cmath>
 #include <stdexcept>
@@ -127,6 +128,20 @@ namespace dsp::adapters
         void reset() override
         {
             std::fill(m_prev_output.begin(), m_prev_output.end(), 0.0f);
+        }
+
+        void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            s.writeFloat(m_alpha);
+            s.writeInt32(m_num_channels);
+            s.writeFloatArray(m_prev_output);
+        }
+
+        void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            m_alpha = d.readFloat();
+            m_num_channels = d.readInt32();
+            m_prev_output = d.readFloatArray();
         }
 
         bool isResizing() const override

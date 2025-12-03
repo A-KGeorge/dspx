@@ -4,22 +4,25 @@ import { createDspPipeline } from "../bindings.js";
 
 test("ChannelMerge - mono to stereo (duplicate channel)", async () => {
   const pipeline = createDspPipeline();
+  try {
+    // Duplicate channel 0 to create stereo from mono
+    pipeline.ChannelMerge({
+      mapping: [0, 0],
+      numInputChannels: 1,
+    });
 
-  // Duplicate channel 0 to create stereo from mono
-  pipeline.ChannelMerge({
-    mapping: [0, 0],
-    numInputChannels: 1,
-  });
+    const input = new Float32Array([1, 2, 3, 4, 5]);
 
-  const input = new Float32Array([1, 2, 3, 4, 5]);
+    const result = await pipeline.process(input, {
+      channels: 1,
+      sampleRate: 1000,
+    });
 
-  const result = await pipeline.process(input, {
-    channels: 1,
-    sampleRate: 1000,
-  });
-
-  // Each mono sample should be duplicated
-  assert.deepEqual(Array.from(result), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
+    // Each mono sample should be duplicated
+    assert.deepEqual(Array.from(result), [1, 1, 2, 2, 3, 3, 4, 4, 5, 5]);
+  } finally {
+    pipeline.dispose();
+  }
 });
 
 test("ChannelMerge - duplicate each channel", async () => {

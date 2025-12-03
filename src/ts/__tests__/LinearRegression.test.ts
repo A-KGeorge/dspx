@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -17,6 +17,10 @@ describe("Linear Regression Stage", () => {
 
   beforeEach(() => {
     pipeline = createDspPipeline();
+  });
+
+  afterEach(() => {
+    pipeline.dispose();
   });
 
   describe("Slope Output", () => {

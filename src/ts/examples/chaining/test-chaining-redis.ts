@@ -26,13 +26,12 @@ async function testChainingWithRedis(startFresh = false) {
   }
 
   // 2. Create a chained pipeline
-  const pipeline = createDspPipeline({
-    redisHost: "localhost",
-    redisPort: 6379,
-    stateKey,
-  });
+  const pipeline = createDspPipeline();
 
-  pipeline.MovingAverage({ mode: "moving", windowSize: 3 }).Rms({ mode: "moving", windowSize: 3 }).Rectify();
+  pipeline
+    .MovingAverage({ mode: "moving", windowSize: 3 })
+    .Rms({ mode: "moving", windowSize: 3 })
+    .Rectify();
 
   console.log("Pipeline: MovingAverage → RMS → Rectify\n");
 
@@ -66,13 +65,12 @@ async function testChainingWithRedis(startFresh = false) {
 
   // 6. Simulate process restart
   console.log("\n--- Simulating Restart ---\n");
-  const pipeline2 = createDspPipeline({
-    redisHost: "localhost",
-    redisPort: 6379,
-    stateKey,
-  });
+  const pipeline2 = createDspPipeline();
 
-  pipeline2.MovingAverage({ mode: "moving", windowSize: 3 }).Rms({ mode: "moving", windowSize: 3 }).Rectify();
+  pipeline2
+    .MovingAverage({ mode: "moving", windowSize: 3 })
+    .Rms({ mode: "moving", windowSize: 3 })
+    .Rectify();
 
   const restoredState = await redis.get(stateKey);
   if (restoredState) {

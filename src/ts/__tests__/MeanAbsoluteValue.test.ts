@@ -1,4 +1,4 @@
-import { describe, test, beforeEach } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { createDspPipeline, DspProcessor } from "../bindings.js";
 
@@ -17,6 +17,10 @@ describe("Mean Absolute Value Filter", () => {
 
   beforeEach(() => {
     processor = createDspPipeline();
+  });
+
+  afterEach(() => {
+    processor.dispose();
   });
 
   describe("Basic Functionality", () => {
@@ -108,7 +112,9 @@ describe("Mean Absolute Value Filter", () => {
       // Build state
       await processor.process(new Float32Array([1, -2, 3]), DEFAULT_OPTIONS);
 
-      const stateJson = await processor.saveState();
+      const rawState = await processor.saveState();
+      const stateJson =
+        typeof rawState === "string" ? rawState : rawState.toString("utf-8");
       const state = JSON.parse(stateJson);
 
       assert.ok(state);
@@ -161,7 +167,9 @@ describe("Mean Absolute Value Filter", () => {
       processor.MeanAbsoluteValue({ mode: "moving", windowSize: 3 });
       await processor.process(new Float32Array([1, -2, 3]), DEFAULT_OPTIONS);
 
-      const stateJson = await processor.saveState();
+      const rawState = await processor.saveState();
+      const stateJson =
+        typeof rawState === "string" ? rawState : rawState.toString("utf-8");
       const state = JSON.parse(stateJson);
 
       // Corrupt the buffer

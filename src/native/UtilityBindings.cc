@@ -204,12 +204,142 @@ namespace dsp
         }
 
         /**
+         * @brief Interleaves an array of planar Float32Arrays into a single Float32Array.
+         *
+         * Takes an array of Float32Arrays (one per channel) and combines them into a
+         * single interleaved buffer.
+         *
+         * @param info[0] - An array of Float32Array objects.
+         * @returns A new Float32Array containing the interleaved data.
+         */
+        Napi::Value Interleave(const Napi::CallbackInfo &info)
+        {
+            Napi::Env env = info.Env();
+
+            if (info.Length() < 1 || !info[0].IsArray())
+            {
+                Napi::TypeError::New(env, "Expected an array of Float32Arrays").ThrowAsJavaScriptException();
+                return env.Null();
+            }
+
+            Napi::Array planarArray = info[0].As<Napi::Array>();
+            uint32_t numChannels = planarArray.Length();
+
+            if (numChannels == 0)
+            {
+                return Napi::Float32Array::New(env, 0);
+            }
+
+            std::vector<Napi::Float32Array> channels;
+            size_t channelLength = 0;
+
+            for (uint32_t i = 0; i < numChannels; ++i)
+            {
+                Napi::Value val = planarArray.Get(i);
+                if (!val.IsTypedArray() || val.As<Napi::TypedArray>().TypedArrayType() != napi_float32_array)
+                {
+                    Napi::TypeError::New(env, "All elements in the array must be Float32Arrays").ThrowAsJavaScriptException();
+                    return env.Null();
+                }
+                Napi::Float32Array channel = val.As<Napi::Float32Array>();
+                if (i == 0)
+                {
+                    channelLength = channel.ElementLength();
+                }
+                else if (channel.ElementLength() != channelLength)
+                {
+                    Napi::TypeError::New(env, "All channels must have the same length").ThrowAsJavaScriptException();
+                    return env.Null();
+                }
+                channels.push_back(channel);
+            }
+
+            size_t interleavedLength = numChannels * channelLength;
+            Napi::Float32Array interleaved = Napi::Float32Array::New(env, interleavedLength);
+            float *outputData = interleaved.Data();
+
+            for (size_t i = 0; i < channelLength; ++i)
+            {
+                for (uint32_t c = 0; c < numChannels; ++c)
+                {
+                    outputData[i * numChannels + c] = channels[c].Data()[i];
+                }
+            }
+
+            return interleaved;
+        }
+
+        /**
+         * @brief Deinterleaves a single Float32Array into an array of planar Float32Arrays.
+         *
+         * Takes an interleaved Float32Array and a channel count, and separates them
+         * into an array of Float32Arrays (one per channel).
+         *
+         * @param info[0] - The interleaved Float32Array.
+         * @param info[1] - The number of channels.
+         * @returns An array of new Float32Arrays, one for each channel.
+         */
+        Napi::Value Deinterleave(const Napi::CallbackInfo &info)
+        {
+            Napi::Env env = info.Env();
+
+            if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsNumber())
+            {
+                Napi::TypeError::New(env, "Expected an interleaved Float32Array and a channel count").ThrowAsJavaScriptException();
+                return env.Null();
+            }
+
+            Napi::TypedArray typedArray = info[0].As<Napi::TypedArray>();
+            if (typedArray.TypedArrayType() != napi_float32_array)
+            {
+                Napi::TypeError::New(env, "Input must be a Float32Array").ThrowAsJavaScriptException();
+                return env.Null();
+            }
+
+            Napi::Float32Array interleaved = typedArray.As<Napi::Float32Array>();
+            int numChannels = info[1].As<Napi::Number>().Int32Value();
+
+            if (numChannels <= 0)
+            {
+                Napi::TypeError::New(env, "Number of channels must be positive").ThrowAsJavaScriptException();
+                return env.Null();
+            }
+
+            size_t interleavedLength = interleaved.ElementLength();
+            if (interleavedLength % numChannels != 0)
+            {
+                Napi::RangeError::New(env, "Interleaved length is not divisible by the number of channels").ThrowAsJavaScriptException();
+                return env.Null();
+            }
+
+            size_t channelLength = interleavedLength / numChannels;
+            const float *inputData = interleaved.Data();
+
+            Napi::Array planarArray = Napi::Array::New(env, numChannels);
+
+            for (int c = 0; c < numChannels; ++c)
+            {
+                Napi::Float32Array channel = Napi::Float32Array::New(env, channelLength);
+                float *channelData = channel.Data();
+                for (size_t i = 0; i < channelLength; ++i)
+                {
+                    channelData[i] = inputData[i * numChannels + c];
+                }
+                planarArray.Set(c, channel);
+            }
+
+            return planarArray;
+        }
+
+        /**
          * @brief Initialize utility function bindings
          */
         Napi::Object InitUtilityBindings(Napi::Env env, Napi::Object exports)
         {
             exports.Set("dotProduct", Napi::Function::New(env, DotProduct));
             exports.Set("detrend", Napi::Function::New(env, Detrend));
+            exports.Set("interleave", Napi::Function::New(env, Interleave));
+            exports.Set("deinterleave", Napi::Function::New(env, Deinterleave));
             return exports;
         }
 

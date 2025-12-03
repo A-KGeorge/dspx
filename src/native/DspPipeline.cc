@@ -1,37 +1,39 @@
 #include "DspPipeline.h"
-#include "adapters/MovingAverageStage.h"     // Moving Average method
-#include "adapters/RmsStage.h"               // RMS method
-#include "adapters/RectifyStage.h"           // Rectify method
-#include "adapters/VarianceStage.h"          // Variance method
-#include "adapters/ZScoreNormalizeStage.h"   // Z-Score Normalize method
-#include "adapters/MeanAbsoluteValueStage.h" // Mean Absolute Value method
-#include "adapters/WaveformLengthStage.h"    // Waveform Length method
-#include "adapters/SscStage.h"               // Slope Sign Change method
-#include "adapters/WampStage.h"              // Willison Amplitude method
-#include "adapters/FilterStage.h"            // Filter stage (FIR/IIR)
-#include "adapters/InterpolatorStage.h"      // Interpolator (upsample)
-#include "adapters/DecimatorStage.h"         // Decimator (downsample)
-#include "adapters/ResamplerStage.h"         // Resampler (rational rate conversion)
-#include "adapters/ConvolutionStage.h"       // Convolution stage
-#include "adapters/LinearRegressionStage.h"  // Linear Regression stage
-#include "adapters/LmsStage.h"               // LMS Adaptive Filter stage
-#include "adapters/RlsStage.h"               // RLS Adaptive Filter stage
-#include "adapters/WaveletTransformStage.h"  // Wavelet Transform stage
-#include "adapters/HilbertEnvelopeStage.h"   // Hilbert Envelope stage
-#include "adapters/StftStage.h"              // STFT (Short-Time Fourier Transform) stage
-#include "adapters/FftStage.h"               // FFT (Fast Fourier Transform) stage
-#include "adapters/MelSpectrogramStage.h"    // Mel Spectrogram stage
-#include "adapters/MfccStage.h"              // MFCC (Mel-Frequency Cepstral Coefficients) stage
-#include "adapters/MatrixTransformStage.h"   // Matrix Transform stage (PCA/ICA/Whitening)
-#include "adapters/GscPreprocessorStage.h"   // GSC Preprocessor for adaptive beamforming
-#include "adapters/ChannelSelectorStage.h"   // Channel selector for reducing channel count
-#include "adapters/ChannelSelectStage.h"     // Channel selector by indices (select/reorder)
-#include "adapters/ChannelMergeStage.h"      // Channel merger/duplicator (merge/expand)
-#include "adapters/ClipDetectionStage.h"     // Clip detection stage
-#include "adapters/PeakDetectionStage.h"     // Peak detection stage
-#include "adapters/DifferentiatorStage.h"    // Differentiator stage
-#include "adapters/IntegratorStage.h"        // Integrator stage
-#include "adapters/SnrStage.h"               // SNR stage
+#include "adapters/MovingAverageStage.h"            // Moving Average method
+#include "adapters/ExponentialMovingAverageStage.h" // Exponential Moving Average method
+#include "adapters/CumulativeMovingAverageStage.h"  // Cumulative Moving Average method
+#include "adapters/RmsStage.h"                      // RMS method
+#include "adapters/RectifyStage.h"                  // Rectify method
+#include "adapters/VarianceStage.h"                 // Variance method
+#include "adapters/ZScoreNormalizeStage.h"          // Z-Score Normalize method
+#include "adapters/MeanAbsoluteValueStage.h"        // Mean Absolute Value method
+#include "adapters/WaveformLengthStage.h"           // Waveform Length method
+#include "adapters/SscStage.h"                      // Slope Sign Change method
+#include "adapters/WampStage.h"                     // Willison Amplitude method
+#include "adapters/FilterStage.h"                   // Filter stage (FIR/IIR)
+#include "adapters/InterpolatorStage.h"             // Interpolator (upsample)
+#include "adapters/DecimatorStage.h"                // Decimator (downsample)
+#include "adapters/ResamplerStage.h"                // Resampler (rational rate conversion)
+#include "adapters/ConvolutionStage.h"              // Convolution stage
+#include "adapters/LinearRegressionStage.h"         // Linear Regression stage
+#include "adapters/LmsStage.h"                      // LMS Adaptive Filter stage
+#include "adapters/RlsStage.h"                      // RLS Adaptive Filter stage
+#include "adapters/WaveletTransformStage.h"         // Wavelet Transform stage
+#include "adapters/HilbertEnvelopeStage.h"          // Hilbert Envelope stage
+#include "adapters/StftStage.h"                     // STFT (Short-Time Fourier Transform) stage
+#include "adapters/FftStage.h"                      // FFT (Fast Fourier Transform) stage
+#include "adapters/MelSpectrogramStage.h"           // Mel Spectrogram stage
+#include "adapters/MfccStage.h"                     // MFCC (Mel-Frequency Cepstral Coefficients) stage
+#include "adapters/MatrixTransformStage.h"          // Matrix Transform stage (PCA/ICA/Whitening)
+#include "adapters/GscPreprocessorStage.h"          // GSC Preprocessor for adaptive beamforming
+#include "adapters/ChannelSelectorStage.h"          // Channel selector for reducing channel count
+#include "adapters/ChannelSelectStage.h"            // Channel selector by indices (select/reorder)
+#include "adapters/ChannelMergeStage.h"             // Channel merger/duplicator (merge/expand)
+#include "adapters/ClipDetectionStage.h"            // Clip detection stage
+#include "adapters/PeakDetectionStage.h"            // Peak detection stage
+#include "adapters/DifferentiatorStage.h"           // Differentiator stage
+#include "adapters/IntegratorStage.h"               // Integrator stage
+#include "adapters/SnrStage.h"                      // SNR stage
 
 namespace dsp
 {
@@ -42,6 +44,8 @@ namespace dsp
 
 #include <iostream>
 #include <ctime>
+#include <cstdlib>
+#include "utils/Toon.h"
 
 namespace dsp
 {
@@ -56,12 +60,16 @@ namespace dsp
 
                                                                   // Processing
                                                                   InstanceMethod("process", &DspPipeline::ProcessAsync),
+                                                                  InstanceMethod("processSync", &DspPipeline::ProcessSync),
 
                                                                   // State management (for Redis persistence from TypeScript)
                                                                   InstanceMethod("saveState", &DspPipeline::SaveState),
                                                                   InstanceMethod("loadState", &DspPipeline::LoadState),
                                                                   InstanceMethod("clearState", &DspPipeline::ClearState),
                                                                   InstanceMethod("listState", &DspPipeline::ListState),
+
+                                                                  // Lifecycle management
+                                                                  InstanceMethod("dispose", &DspPipeline::Dispose),
                                                               });
 
         exports.Set("DspPipeline", func);
@@ -72,7 +80,8 @@ namespace dsp
     DspPipeline::DspPipeline(const Napi::CallbackInfo &info)
         : Napi::ObjectWrap<DspPipeline>(info)
     {
-        // Config logic from TS (redis, stateKey) would go here
+        // Initialize the lock
+        m_isBusy = std::make_shared<std::atomic<bool>>(false);
         InitializeStageFactories();
     }
 
@@ -111,6 +120,35 @@ namespace dsp
             }
 
             return std::make_unique<dsp::adapters::MovingAverageStage>(mode, windowSize, windowDurationMs);
+        };
+
+        // Factory for Exponential Moving Average stage
+        m_stageFactories["exponentialMovingAverage"] = [](const Napi::Object &params)
+        {
+            std::string modeStr = params.Get("mode").As<Napi::String>().Utf8Value();
+            dsp::adapters::EmaMode mode = (modeStr == "moving") ? dsp::adapters::EmaMode::Moving : dsp::adapters::EmaMode::Batch;
+
+            // Parse alpha parameter (required, must be in range (0, 1])
+            if (!params.Has("alpha"))
+            {
+                throw std::invalid_argument("ExponentialMovingAverage: 'alpha' parameter is required");
+            }
+            double alpha = params.Get("alpha").As<Napi::Number>().DoubleValue();
+            if (alpha <= 0.0 || alpha > 1.0)
+            {
+                throw std::invalid_argument("ExponentialMovingAverage: 'alpha' must be in range (0, 1]");
+            }
+
+            return std::make_unique<dsp::adapters::ExponentialMovingAverageStage>(mode, static_cast<float>(alpha));
+        };
+
+        // Factory for Cumulative Moving Average stage
+        m_stageFactories["cumulativeMovingAverage"] = [](const Napi::Object &params)
+        {
+            std::string modeStr = params.Get("mode").As<Napi::String>().Utf8Value();
+            dsp::adapters::CmaMode mode = (modeStr == "moving") ? dsp::adapters::CmaMode::Moving : dsp::adapters::CmaMode::Batch;
+
+            return std::make_unique<dsp::adapters::CumulativeMovingAverageStage>(mode);
         };
 
         // Factory for RMS stage
@@ -993,6 +1031,19 @@ namespace dsp
     {
         Napi::Env env = info.Env();
 
+        // Check if pipeline is disposed
+        if (m_disposed)
+        {
+            Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        if (*m_isBusy)
+        {
+            Napi::Error::New(env, "Cannot add stage while processing").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
         // 1. Get arguments from TypeScript
         std::string stageName = info[0].As<Napi::String>();
         Napi::Object params = info[1].As<Napi::Object>();
@@ -1035,6 +1086,19 @@ namespace dsp
     Napi::Value DspPipeline::AddFilterStage(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
+
+        // Check if pipeline is disposed
+        if (m_disposed)
+        {
+            Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        if (*m_isBusy)
+        {
+            Napi::Error::New(env, "Cannot add filter stage while processing").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
 
         if (info.Length() < 2 || !info[0].IsTypedArray() || !info[1].IsTypedArray())
         {
@@ -1080,19 +1144,23 @@ namespace dsp
                       std::vector<std::unique_ptr<IDspStage>> &stages,
                       float *data,
                       float *timestamps,
+                      double sampleRate,
                       size_t numSamples,
                       int channels,
                       Napi::Reference<Napi::Float32Array> &&bufferRef,
-                      Napi::Reference<Napi::Float32Array> &&timestampRef)
+                      Napi::Reference<Napi::Float32Array> &&timestampRef,
+                      std::shared_ptr<std::atomic<bool>> busyLock)
             : Napi::AsyncWorker(env),
               m_deferred(std::move(deferred)),
               m_stages(stages),
               m_data(data),
               m_timestamps(timestamps),
+              m_sampleRate(sampleRate),
               m_numSamples(numSamples),
               m_channels(channels),
               m_bufferRef(std::move(bufferRef)),
-              m_timestampRef(std::move(timestampRef))
+              m_timestampRef(std::move(timestampRef)),
+              m_busyLock(busyLock)
         {
         }
 
@@ -1100,20 +1168,42 @@ namespace dsp
         // This runs on a worker thread (not blocking the event loop)
         void Execute() override
         {
+            // Local storage for generated timestamps (RAII - automatically freed when function exits)
+            std::vector<float> generatedTimestamps;
+
             try
             {
-                // Process the buffer through all stages
-                // Handle both in-place and resizing stages
+                // 1. Generate Timestamps if missing (Optimization)
+                if (m_timestamps == nullptr)
+                {
+                    generatedTimestamps.resize(m_numSamples);
+
+                    // Calculate time step (dt) in milliseconds
+                    // If sampleRate is 0 or invalid, default to 1.0 (treating indices as time)
+                    double dt = (m_sampleRate > 0.0) ? (1000.0 / m_sampleRate) : 1.0;
+
+                    // Fill timestamps linearly: t[i] = i * dt
+                    for (size_t i = 0; i < m_numSamples; ++i)
+                    {
+                        generatedTimestamps[i] = static_cast<float>(i * dt);
+                    }
+
+                    // Point the main processing pointer to our locally generated data
+                    m_timestamps = generatedTimestamps.data();
+                }
+
+                // 2. Process the buffer through all stages
                 float *currentBuffer = m_data;
                 size_t currentSize = m_numSamples;
                 float *tempBuffer = nullptr;
                 bool usingTempBuffer = false;
 
+                const bool debugStageDumps = std::getenv("DSPX_DEBUG_STAGE_DUMPS") != nullptr;
                 for (const auto &stage : m_stages)
                 {
                     if (stage->isResizing())
                     {
-                        // Resizing stage: allocate new buffer
+                        // Resizing logic (same as before)
                         size_t outputSize = stage->calculateOutputSize(currentSize);
                         float *outputBuffer = new float[outputSize];
 
@@ -1122,92 +1212,75 @@ namespace dsp
                                                outputBuffer, actualOutputSize,
                                                m_channels, m_timestamps);
 
-                        // Free the previous temporary buffer if we allocated one
                         if (usingTempBuffer)
-                        {
                             delete[] currentBuffer;
-                        }
-
                         currentBuffer = outputBuffer;
                         currentSize = actualOutputSize;
                         usingTempBuffer = true;
 
-                        // Update channel count if this stage changes it (e.g., ChannelSelector)
                         int outputChannels = stage->getOutputChannels();
                         if (outputChannels > 0)
-                        {
                             m_channels = outputChannels;
-                        }
 
-                        // Adjust timestamps for resampled data
+                        // Re-interpolate timestamps if needed (same as before)
                         if (m_timestamps != nullptr)
                         {
                             double timeScale = stage->getTimeScaleFactor();
                             size_t numOutputSamples = actualOutputSize / m_channels;
-
-                            // Allocate new timestamp buffer
                             float *newTimestamps = new float[actualOutputSize];
 
-                            // Interpolate timestamps based on time scale
-                            // For upsampling (timeScale < 1): more samples, smaller time steps
-                            // For downsampling (timeScale > 1): fewer samples, larger time steps
                             for (size_t i = 0; i < numOutputSamples; ++i)
                             {
-                                // Map output sample index to input time domain
                                 double inputTime = i * timeScale;
                                 size_t inputIdx = static_cast<size_t>(inputTime);
                                 double frac = inputTime - inputIdx;
-
                                 float timestamp;
-                                if (inputIdx >= (m_numSamples / m_channels))
+
+                                if (inputIdx >= (currentSize / m_channels))
                                 {
-                                    // Beyond input range, extrapolate
-                                    timestamp = m_timestamps[(m_numSamples / m_channels - 1) * m_channels] +
-                                                static_cast<float>((inputTime - (m_numSamples / m_channels - 1)) * timeScale);
+                                    size_t lastIdx = (currentSize / m_channels) - 1;
+                                    timestamp = m_timestamps[lastIdx * m_channels] +
+                                                static_cast<float>((inputTime - lastIdx) * timeScale);
                                 }
-                                else if (inputIdx + 1 >= (m_numSamples / m_channels))
+                                else if (inputIdx + 1 >= (currentSize / m_channels))
                                 {
-                                    // At boundary, use last timestamp
                                     timestamp = m_timestamps[inputIdx * m_channels];
                                 }
                                 else
                                 {
-                                    // Interpolate between two timestamps
                                     float t0 = m_timestamps[inputIdx * m_channels];
                                     float t1 = m_timestamps[(inputIdx + 1) * m_channels];
                                     timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
                                 }
 
-                                // Replicate timestamp for all channels
                                 for (int ch = 0; ch < m_channels; ++ch)
                                 {
                                     newTimestamps[i * m_channels + ch] = timestamp;
                                 }
                             }
-
-                            // Replace old timestamps
-                            // Note: We don't own the original m_timestamps, so don't delete it
                             m_timestamps = newTimestamps;
                             m_timestampBuffer.reset(newTimestamps);
                         }
                     }
                     else
                     {
-                        // In-place stage: process directly
-                        // If we're using a temp buffer, process it; otherwise process original
-                        if (usingTempBuffer)
+                        // In-place processing
+                        stage->process(currentBuffer, currentSize, m_channels, m_timestamps);
+
+                        if (debugStageDumps)
                         {
-                            stage->process(currentBuffer, currentSize, m_channels, m_timestamps);
-                        }
-                        else
-                        {
-                            // First in-place stage on original buffer
-                            stage->process(currentBuffer, currentSize, m_channels, m_timestamps);
+                            const char *stype = stage->getType();
+                            size_t toShow = std::min<size_t>(8, currentSize);
+                            std::cout << "[DUMP] after '" << stype << "':";
+                            for (size_t i = 0; i < toShow; ++i)
+                            {
+                                std::cout << (i == 0 ? ' ' : ',') << currentBuffer[i];
+                            }
+                            std::cout << std::endl;
                         }
                     }
                 }
 
-                // Store final result
                 m_finalBuffer = currentBuffer;
                 m_finalSize = currentSize;
                 m_ownsBuffer = usingTempBuffer;
@@ -1221,14 +1294,15 @@ namespace dsp
         // This runs on the main thread after Execute() completes
         void OnOK() override
         {
+            *m_busyLock = false; // unlock the pipeline
+
             Napi::Env env = Env();
 
             // Create a new Float32Array with the final buffer size
             Napi::Float32Array outputArray = Napi::Float32Array::New(env, m_finalSize);
-            float *outputData = outputArray.Data();
 
             // Copy final data to the output array
-            std::memcpy(outputData, m_finalBuffer, m_finalSize * sizeof(float));
+            std::memcpy(outputArray.Data(), m_finalBuffer, m_finalSize * sizeof(float));
 
             // Clean up temporary buffer if we allocated one
             if (m_ownsBuffer)
@@ -1243,6 +1317,7 @@ namespace dsp
         void OnError(const Napi::Error &error) override
         {
             m_deferred.Reject(error.Value());
+            *m_busyLock = false; // unlock the pipeline
         }
 
     private:
@@ -1250,6 +1325,7 @@ namespace dsp
         std::vector<std::unique_ptr<IDspStage>> &m_stages;
         float *m_data;
         float *m_timestamps;
+        double m_sampleRate;
         size_t m_numSamples;
         int m_channels;
         Napi::Reference<Napi::Float32Array> m_bufferRef;
@@ -1262,6 +1338,8 @@ namespace dsp
 
         // For managing allocated timestamp buffer
         std::unique_ptr<float[]> m_timestampBuffer;
+
+        std::shared_ptr<std::atomic<bool>> m_busyLock; // Pointer to the busy lock
     };
 
     /**
@@ -1276,48 +1354,75 @@ namespace dsp
     {
         Napi::Env env = info.Env();
 
-        // 1. Get buffer from TypeScript (zero-copy)
+        // Check if pipeline is disposed
+        if (m_disposed)
+        {
+            Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        if (*m_isBusy)
+        {
+            Napi::Error::New(env, "Pipeline is busy: Cannot call process() while another operation is running.").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        if (!info[0].IsTypedArray())
+        {
+            Napi::TypeError::New(env, "Argument 0 must be a Float32Array").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
         Napi::Float32Array jsBuffer = info[0].As<Napi::Float32Array>();
         float *data = jsBuffer.Data();
         size_t numSamples = jsBuffer.ElementLength();
 
-        // 2. Get timestamps and options
-        // TypeScript can pass either:
-        //   process(buffer, timestamps, options) - new time-based API
-        //   process(buffer, options) - legacy sample-based API (timestamps = nullptr)
         Napi::Float32Array jsTimestamps;
         float *timestamps = nullptr;
         Napi::Object options;
+        double sampleRate = 0.0;
 
-        if (info.Length() >= 2 && info[1].IsTypedArray())
+        if (info.Length() >= 3 && info[1].IsTypedArray())
         {
-            // New API: timestamps provided
+            // Mode A: Explicit Timestamps
             jsTimestamps = info[1].As<Napi::Float32Array>();
             timestamps = jsTimestamps.Data();
             options = info[2].As<Napi::Object>();
 
-            // Validate timestamp length matches sample length
             if (jsTimestamps.ElementLength() != numSamples)
             {
-                Napi::TypeError::New(env, "Timestamp array length must match sample array length")
-                    .ThrowAsJavaScriptException();
+                Napi::TypeError::New(env, "Timestamp array length must match sample array length").ThrowAsJavaScriptException();
                 return env.Undefined();
             }
         }
         else
         {
-            // Legacy API: no timestamps (will use sample indices)
-            options = info[1].As<Napi::Object>();
+            // Mode B: Implicit Timestamps
+            // If info[1] exists and is an object, use it as options.
+            if (info.Length() >= 2 && info[1].IsObject())
+            {
+                options = info[1].As<Napi::Object>();
+            }
+            else
+            {
+                options = Napi::Object::New(env);
+            }
         }
 
-        int channels = options.Get("channels").As<Napi::Number>().Uint32Value();
-        // int sampleRate = options.Get("sampleRate").As<Napi::Number>().Uint32Value();
+        // Extract options safely
+        if (options.Has("sampleRate"))
+        {
+            sampleRate = options.Get("sampleRate").As<Napi::Number>().DoubleValue();
+        }
 
-        // 3. Create a deferred promise and get the promise before moving
+        int channels = 1;
+        if (options.Has("channels"))
+        {
+            channels = options.Get("channels").As<Napi::Number>().Uint32Value();
+        }
+
         Napi::Promise::Deferred deferred = Napi::Promise::Deferred::New(env);
         Napi::Promise promise = deferred.Promise();
 
-        // 4. Create references to keep buffers alive during async operation
         Napi::Reference<Napi::Float32Array> bufferRef = Napi::Reference<Napi::Float32Array>::New(jsBuffer, 1);
         Napi::Reference<Napi::Float32Array> timestampRef;
         if (timestamps != nullptr)
@@ -1325,12 +1430,151 @@ namespace dsp
             timestampRef = Napi::Reference<Napi::Float32Array>::New(jsTimestamps, 1);
         }
 
-        // 5. Create and queue the worker
-        ProcessWorker *worker = new ProcessWorker(env, std::move(deferred), m_stages, data, timestamps, numSamples, channels, std::move(bufferRef), std::move(timestampRef));
+        *m_isBusy = true; // lock the pipeline
+
+        ProcessWorker *worker = new ProcessWorker(env, std::move(deferred), m_stages, data, timestamps, sampleRate, numSamples, channels, std::move(bufferRef), std::move(timestampRef), m_isBusy);
         worker->Queue();
 
-        // 6. Return the promise immediately
         return promise;
+    }
+
+    /**
+     * This is the "ProcessSync" method.
+     * TS calls:
+     *  await native.processSync(buffer, timestamps, { channels: 4 })
+     * or (legacy):
+     *  await native.processSync(buffer, { sampleRate: 2000, channels: 4 })
+     * Returns the processed buffer directly.
+     */
+
+    Napi::Value DspPipeline::ProcessSync(const Napi::CallbackInfo &info)
+    {
+        Napi::Env env = info.Env();
+
+        // Check if pipeline is disposed
+        if (m_disposed)
+        {
+            Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        if (*m_isBusy)
+        {
+            Napi::Error::New(env, "Pipeline is busy: Cannot call processSync() while an async operation is running.").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        if (info.Length() < 1 || !info[0].IsTypedArray())
+        {
+            Napi::TypeError::New(env, "Buffer required (Float32Array)").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        Napi::Float32Array jsBuffer = info[0].As<Napi::Float32Array>();
+        float *data = jsBuffer.Data();
+        size_t numSamples = jsBuffer.ElementLength();
+
+        Napi::Float32Array jsTimestamps;
+        float *timestamps = nullptr;
+        Napi::Object options;
+        double sampleRate = 0.0;
+
+        if (info.Length() >= 3 && info[1].IsTypedArray())
+        {
+            // Mode A: Explicit Timestamps
+            jsTimestamps = info[1].As<Napi::Float32Array>();
+            timestamps = jsTimestamps.Data();
+            options = info[2].As<Napi::Object>();
+
+            if (jsTimestamps.ElementLength() != numSamples)
+            {
+                Napi::TypeError::New(env, "Timestamp array length must match sample array length").ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+        }
+        else
+        {
+            // Mode B: Implicit Timestamps
+            // If info[1] exists and is an object, use it as options.
+            if (info.Length() >= 2 && info[1].IsObject())
+            {
+                options = info[1].As<Napi::Object>();
+            }
+            else
+            {
+                options = Napi::Object::New(env);
+            }
+        }
+
+        // Extract options safely
+        if (options.Has("sampleRate"))
+        {
+            sampleRate = options.Get("sampleRate").As<Napi::Number>().DoubleValue();
+        }
+
+        int channels = 1;
+        if (options.Has("channels"))
+        {
+            channels = options.Get("channels").As<Napi::Number>().Uint32Value();
+        }
+
+        Napi::Reference<Napi::Float32Array> bufferRef = Napi::Reference<Napi::Float32Array>::New(jsBuffer, 1);
+        Napi::Reference<Napi::Float32Array> timestampRef;
+        if (timestamps != nullptr)
+        {
+            timestampRef = Napi::Reference<Napi::Float32Array>::New(jsTimestamps, 1);
+        }
+
+        // --- Core Processing Logic (Direct Execution) ---
+
+        float *currentData = data;
+        size_t currentSize = numSamples;
+        std::vector<float> tempBuffer; // Safe RAII container
+        bool isDetached = false;
+
+        try
+        {
+            for (const auto &stage : m_stages)
+            {
+                if (stage->isResizing())
+                {
+                    size_t outputSize = stage->calculateOutputSize(currentSize);
+                    std::vector<float> nextBuffer(outputSize);
+                    size_t actualOutputSize = 0;
+
+                    stage->processResizing(currentData, currentSize, nextBuffer.data(), actualOutputSize, channels, timestamps);
+
+                    tempBuffer = std::move(nextBuffer);
+                    currentData = tempBuffer.data();
+                    currentSize = actualOutputSize;
+                    isDetached = true;
+
+                    if (stage->getOutputChannels() > 0)
+                        channels = stage->getOutputChannels();
+                }
+                else
+                {
+                    stage->process(currentData, currentSize, channels, timestamps);
+                }
+            }
+        }
+        catch (const std::exception &e)
+        {
+            Napi::Error::New(env, e.what()).ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        // 4. Return
+        if (isDetached)
+        {
+            Napi::Float32Array outputArray = Napi::Float32Array::New(env, currentSize);
+            std::memcpy(outputArray.Data(), currentData, currentSize * sizeof(float));
+            return outputArray;
+        }
+        else
+        {
+            return jsBuffer;
+        }
     }
 
     /**
@@ -1342,37 +1586,94 @@ namespace dsp
     Napi::Value DspPipeline::SaveState(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
-        Napi::Object stateObj = Napi::Object::New(env);
 
-        // Save timestamp
-        stateObj.Set("timestamp", static_cast<double>(std::time(nullptr)));
-
-        // Save pipeline configuration and full state
-        Napi::Array stagesArray = Napi::Array::New(env, m_stages.size());
-
-        for (size_t i = 0; i < m_stages.size(); ++i)
+        // Check if pipeline is disposed
+        if (m_disposed)
         {
-            Napi::Object stageConfig = Napi::Object::New(env);
-
-            stageConfig.Set("index", static_cast<uint32_t>(i));
-            stageConfig.Set("type", m_stages[i]->getType());
-
-            // Serialize the stage's internal state
-            stageConfig.Set("state", m_stages[i]->serializeState(env));
-
-            stagesArray.Set(static_cast<uint32_t>(i), stageConfig);
+            Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
+            return env.Undefined();
         }
 
-        stateObj.Set("stages", stagesArray);
-        stateObj.Set("stageCount", static_cast<uint32_t>(m_stages.size()));
+        // Check for format option
+        bool useToon = false;
+        if (info.Length() > 0 && info[0].IsObject())
+        {
+            Napi::Object options = info[0].As<Napi::Object>();
+            if (options.Has("format"))
+            {
+                std::string fmt = options.Get("format").As<Napi::String>().Utf8Value();
+                if (fmt == "toon")
+                    useToon = true;
+            }
+        }
 
-        // Convert to JSON string using JavaScript's JSON.stringify
-        Napi::Object JSON = env.Global().Get("JSON").As<Napi::Object>();
-        Napi::Function stringify = JSON.Get("stringify").As<Napi::Function>();
-        return stringify.Call(JSON, {stateObj});
+        if (useToon)
+        {
+            // --- Original compact binary TOON path ---
+            try
+            {
+                dsp::toon::Serializer serializer;
+                serializer.startObject();
+                serializer.writeString("timestamp");
+                serializer.writeDouble(static_cast<double>(std::time(nullptr)));
+                serializer.writeString("stageCount");
+                serializer.writeInt32(static_cast<int32_t>(m_stages.size()));
+                serializer.writeString("stages");
+                serializer.startArray();
+                for (const auto &stage : m_stages)
+                {
+                    serializer.startObject();
+                    serializer.writeString("type");
+                    serializer.writeString(stage->getType());
+                    serializer.writeString("state");
+                    stage->serializeToon(serializer);
+                    serializer.endObject();
+                }
+                serializer.endArray();
+                serializer.endObject();
+                return Napi::Buffer<uint8_t>::Copy(env, serializer.buffer.data(), serializer.buffer.size());
+            }
+            catch (const std::exception &e)
+            {
+                Napi::Error::New(env, std::string("TOON Save Failed: ") + e.what()).ThrowAsJavaScriptException();
+                return env.Null();
+            }
+        }
+        else
+        {
+            // --- Legacy JSON Path ---
+            Napi::Object stateObj = Napi::Object::New(env);
+
+            // Save timestamp
+            stateObj.Set("timestamp", static_cast<double>(std::time(nullptr)));
+
+            // Save pipeline configuration and full state
+            Napi::Array stagesArray = Napi::Array::New(env, m_stages.size());
+
+            for (size_t i = 0; i < m_stages.size(); ++i)
+            {
+                Napi::Object stageConfig = Napi::Object::New(env);
+
+                stageConfig.Set("index", static_cast<uint32_t>(i));
+                stageConfig.Set("type", m_stages[i]->getType());
+
+                // Serialize the stage's internal state
+                stageConfig.Set("state", m_stages[i]->serializeState(env));
+
+                stagesArray.Set(static_cast<uint32_t>(i), stageConfig);
+            }
+
+            stateObj.Set("stages", stagesArray);
+            stateObj.Set("stageCount", static_cast<uint32_t>(m_stages.size()));
+
+            // Convert to JSON string using JavaScript's JSON.stringify
+            Napi::Object JSON = env.Global().Get("JSON").As<Napi::Object>();
+            Napi::Function stringify = JSON.Get("stringify").As<Napi::Function>();
+            return stringify.Call(JSON, {stateObj});
+        }
     }
     /**
-     * Load pipeline state from JSON string with Smart Merge Strategy.
+     * Load pipeline state from JSON string or TOON Buffer with Smart Merge Strategy.
      * * Logic:
      * 1. Iterate through the saved state history.
      * 2. If a saved stage matches the current pipeline's next stage (by type),
@@ -1386,9 +1687,138 @@ namespace dsp
     {
         Napi::Env env = info.Env();
 
-        if (info.Length() < 1 || !info[0].IsString())
+        // Check if pipeline is disposed
+        if (m_disposed)
         {
-            Napi::TypeError::New(env, "Expected state JSON string as first argument")
+            Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        if (info.Length() < 1)
+        {
+            Napi::TypeError::New(env, "Expected state (String or Buffer) as first argument")
+                .ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        // --- TOON Path ---
+        // Accept Node Buffer, Uint8Array, or ArrayBuffer
+        const uint8_t *toonDataPtr = nullptr;
+        size_t toonDataLen = 0;
+
+        if (info[0].IsBuffer())
+        {
+            Napi::Buffer<uint8_t> buffer = info[0].As<Napi::Buffer<uint8_t>>();
+            toonDataPtr = buffer.Data();
+            toonDataLen = buffer.Length();
+        }
+        else if (info[0].IsTypedArray())
+        {
+            Napi::TypedArray ta = info[0].As<Napi::TypedArray>();
+            Napi::ArrayBuffer ab = ta.ArrayBuffer();
+            toonDataPtr = static_cast<const uint8_t *>(ab.Data()) + ta.ByteOffset();
+            toonDataLen = ta.ByteLength();
+        }
+        else if (info[0].IsArrayBuffer())
+        {
+            Napi::ArrayBuffer ab = info[0].As<Napi::ArrayBuffer>();
+            toonDataPtr = static_cast<const uint8_t *>(ab.Data());
+            toonDataLen = ab.ByteLength();
+        }
+
+        if (toonDataPtr != nullptr && toonDataLen > 0)
+        {
+            try
+            {
+                const bool debugToon = std::getenv("DSPX_DEBUG_TOON") != nullptr;
+                dsp::toon::Deserializer deserializer(toonDataPtr, toonDataLen);
+                deserializer.consumeToken(dsp::toon::T_OBJECT_START);
+                std::string key = deserializer.readString();
+                double timestamp = deserializer.readDouble();
+                key = deserializer.readString();
+                int32_t savedStageCount = deserializer.readInt32();
+                key = deserializer.readString();
+                deserializer.consumeToken(dsp::toon::T_ARRAY_START);
+                std::vector<std::unique_ptr<IDspStage>> newStages;
+                size_t currentIdx = 0;
+                if (debugToon)
+                {
+                    std::cout << "[TOON] Loading pipeline: savedStageCount=" << savedStageCount
+                              << ", currentStageCount=" << m_stages.size() << std::endl;
+                }
+                while (deserializer.peekToken() != dsp::toon::T_ARRAY_END)
+                {
+                    deserializer.consumeToken(dsp::toon::T_OBJECT_START);
+                    deserializer.readString();
+                    std::string savedType = deserializer.readString();
+                    deserializer.readString();
+                    bool matched = false;
+                    if (currentIdx < m_stages.size())
+                    {
+                        if (std::string(m_stages[currentIdx]->getType()) == savedType)
+                        {
+                            if (debugToon)
+                            {
+                                std::cout << "[TOON] Match stage[" << currentIdx << "]: type='" << savedType << "'"
+                                          << std::endl;
+                            }
+                            m_stages[currentIdx]->deserializeToon(deserializer);
+                            newStages.push_back(std::move(m_stages[currentIdx]));
+                            currentIdx++;
+                            matched = true;
+                        }
+                    }
+                    if (!matched)
+                    {
+                        if (debugToon)
+                        {
+                            std::cout << "[TOON] Mismatch or extra saved stage: type='" << savedType
+                                      << "', creating via factory" << std::endl;
+                        }
+                        auto it = m_stageFactories.find(savedType);
+                        if (it != m_stageFactories.end())
+                        {
+                            auto fresh = it->second(Napi::Object::New(env));
+                            fresh->deserializeToon(deserializer);
+                            newStages.push_back(std::move(fresh));
+                        }
+                        else
+                        {
+                            throw std::runtime_error("TOON Load: Unknown stage type '" + savedType + "'.");
+                        }
+                    }
+                    deserializer.consumeToken(dsp::toon::T_OBJECT_END);
+                }
+                deserializer.consumeToken(dsp::toon::T_ARRAY_END);
+                deserializer.consumeToken(dsp::toon::T_OBJECT_END);
+                while (currentIdx < m_stages.size())
+                {
+                    if (debugToon)
+                    {
+                        std::cout << "[TOON] Appending remaining current stage[" << currentIdx << "]: type='"
+                                  << m_stages[currentIdx]->getType() << "'" << std::endl;
+                    }
+                    newStages.push_back(std::move(m_stages[currentIdx]));
+                    currentIdx++;
+                }
+                m_stages = std::move(newStages);
+                if (debugToon)
+                {
+                    std::cout << "[TOON] Load complete. Final stageCount=" << m_stages.size() << std::endl;
+                }
+                return Napi::Boolean::New(env, true);
+            }
+            catch (const std::exception &e)
+            {
+                Napi::Error::New(env, std::string("TOON Load Failed: ") + e.what()).ThrowAsJavaScriptException();
+                return Napi::Boolean::New(env, false);
+            }
+        }
+
+        // --- Legacy JSON Path ---
+        if (!info[0].IsString())
+        {
+            Napi::TypeError::New(env, "Expected state JSON string or Buffer")
                 .ThrowAsJavaScriptException();
             return env.Undefined();
         }
@@ -1507,6 +1937,13 @@ namespace dsp
     {
         Napi::Env env = info.Env();
 
+        // Check if pipeline is disposed
+        if (m_disposed)
+        {
+            Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
         // Reset all stages
         for (auto &stage : m_stages)
         {
@@ -1528,6 +1965,14 @@ namespace dsp
     Napi::Value DspPipeline::ListState(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
+
+        // Check if pipeline is disposed
+        if (m_disposed)
+        {
+            Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
         Napi::Object summary = Napi::Object::New(env);
 
         // Basic pipeline info
@@ -1586,6 +2031,52 @@ namespace dsp
         summary.Set("stages", stagesArray);
 
         return summary;
+    }
+
+    /**
+     * Dispose of the pipeline and free all resources
+     * This method ensures safe cleanup and prevents further use of the pipeline
+     *
+     * Behavior:
+     * - Blocks disposal if async processing is currently running
+     * - Clears all stages (triggers RAII cleanup of all stage resources)
+     * - Marks pipeline as disposed to prevent future operations
+     * - Safe to call multiple times (idempotent)
+     */
+    Napi::Value DspPipeline::Dispose(const Napi::CallbackInfo &info)
+    {
+        Napi::Env env = info.Env();
+
+        // Already disposed - silently succeed (idempotent behavior)
+        if (m_disposed)
+        {
+            return env.Undefined();
+        }
+
+        // Cannot dispose while processing is in progress
+        if (*m_isBusy)
+        {
+            Napi::Error::New(env, "Cannot dispose pipeline: process() is still running.")
+                .ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+
+        // Clear all stages - triggers RAII cleanup of all stage resources
+        // This will:
+        // - Free all stage internal buffers
+        // - Free all filter state memory
+        // - Free all adaptive filter memory arenas
+        // - Free all detachable buffers
+        // - Free timestamp and resize buffers
+        m_stages.clear();
+
+        // Reset busy flag (defensive programming)
+        *m_isBusy = false;
+
+        // Mark as disposed to prevent further operations
+        m_disposed = true;
+
+        return env.Undefined();
     }
 
 } // namespace dsp

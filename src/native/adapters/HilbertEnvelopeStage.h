@@ -31,6 +31,7 @@
 #include "../core/FftEngine.h"
 #include "../utils/CircularBufferArray.h"
 #include "../utils/SimdOps.h"
+#include "../utils/Toon.h"
 #include <vector>
 #include <complex>
 #include <memory>
@@ -196,6 +197,60 @@ namespace dsp::adapters
 
                 // Restore counter
                 m_samples_since_output[i] = channelState.Get("samplesSinceOutput").As<Napi::Number>().Uint32Value();
+            }
+        }
+
+        inline void serializeToon(dsp::toon::Serializer &s) const override
+        {
+            // Write configuration
+            s.writeInt32(static_cast<int32_t>(m_window_size));
+            s.writeInt32(static_cast<int32_t>(m_hop_size));
+            s.writeInt32(static_cast<int32_t>(m_channel_buffers.size()));
+
+            // Write per-channel state
+            for (size_t i = 0; i < m_channel_buffers.size(); ++i)
+            {
+                std::vector<float> buffer_data = m_channel_buffers[i].toVector();
+                s.writeFloatArray(buffer_data);
+                s.writeInt32(static_cast<int32_t>(m_samples_since_output[i]));
+            }
+        }
+
+        inline void deserializeToon(dsp::toon::Deserializer &d) override
+        {
+            // Read configuration
+            int32_t window_size = d.readInt32();
+            int32_t hop_size = d.readInt32();
+
+            if (window_size <= 0 || hop_size <= 0)
+                throw std::runtime_error("Invalid window/hop size in HilbertEnvelopeStage deserialization");
+
+            if (static_cast<size_t>(window_size) != m_window_size || static_cast<size_t>(hop_size) != m_hop_size)
+                throw std::runtime_error("Window/hop size mismatch in HilbertEnvelopeStage deserialization");
+
+            int32_t num_channels = d.readInt32();
+            if (num_channels < 0)
+                throw std::runtime_error("Invalid num_channels in HilbertEnvelopeStage deserialization");
+
+            // Recreate channel buffers
+            m_channel_buffers.clear();
+            m_samples_since_output.clear();
+
+            for (int32_t i = 0; i < num_channels; ++i)
+            {
+                m_channel_buffers.emplace_back(m_window_size);
+                m_samples_since_output.push_back(0);
+            }
+
+            // Restore per-channel state
+            for (int32_t i = 0; i < num_channels; ++i)
+            {
+                std::vector<float> buffer_data = d.readFloatArray();
+                for (float value : buffer_data)
+                {
+                    m_channel_buffers[i].push(value);
+                }
+                m_samples_since_output[i] = static_cast<size_t>(d.readInt32());
             }
         }
 
