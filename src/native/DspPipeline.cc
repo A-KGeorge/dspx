@@ -29,6 +29,7 @@
 #include "adapters/ChannelSelectorStage.h"          // Channel selector for reducing channel count
 #include "adapters/ChannelSelectStage.h"            // Channel selector by indices (select/reorder)
 #include "adapters/ChannelMergeStage.h"             // Channel merger/duplicator (merge/expand)
+#include "adapters/FilterBankStage.h"               // Filter Bank stage (split channels into frequency bands)
 #include "adapters/ClipDetectionStage.h"            // Clip detection stage
 #include "adapters/PeakDetectionStage.h"            // Peak detection stage
 #include "adapters/DifferentiatorStage.h"           // Differentiator stage
@@ -893,6 +894,60 @@ namespace dsp
 
             return std::make_unique<dsp::adapters::ChannelMergeStage>(
                 mapping, numInputChannels);
+        };
+
+        // ===================================================================
+        // Filter Bank Stage
+        // ===================================================================
+        m_stageFactories["filterBank"] = [](const Napi::Object &params)
+        {
+            if (!params.Has("definitions") || !params.Has("inputChannels"))
+            {
+                throw std::invalid_argument("FilterBank: requires 'definitions' array and 'inputChannels'");
+            }
+
+            // Extract input channel count
+            int inputChannels = params.Get("inputChannels").As<Napi::Number>().Int32Value();
+
+            // Extract filter definitions array
+            Napi::Array defsArray = params.Get("definitions").As<Napi::Array>();
+            std::vector<dsp::adapters::FilterDefinition> definitions;
+            definitions.reserve(defsArray.Length());
+
+            for (uint32_t i = 0; i < defsArray.Length(); ++i)
+            {
+                Napi::Object defObj = defsArray.Get(i).As<Napi::Object>();
+
+                // Extract 'b' coefficients (feedforward)
+                if (!defObj.Has("b"))
+                {
+                    throw std::invalid_argument("FilterBank: Each definition must have 'b' coefficients");
+                }
+                Napi::Array bArray = defObj.Get("b").As<Napi::Array>();
+                std::vector<double> b;
+                b.reserve(bArray.Length());
+                for (uint32_t j = 0; j < bArray.Length(); ++j)
+                {
+                    b.push_back(bArray.Get(j).As<Napi::Number>().DoubleValue());
+                }
+
+                // Extract 'a' coefficients (feedback)
+                if (!defObj.Has("a"))
+                {
+                    throw std::invalid_argument("FilterBank: Each definition must have 'a' coefficients");
+                }
+                Napi::Array aArray = defObj.Get("a").As<Napi::Array>();
+                std::vector<double> a;
+                a.reserve(aArray.Length());
+                for (uint32_t j = 0; j < aArray.Length(); ++j)
+                {
+                    a.push_back(aArray.Get(j).As<Napi::Number>().DoubleValue());
+                }
+
+                definitions.push_back({b, a});
+            }
+
+            return std::make_unique<dsp::adapters::FilterBankStage>(definitions, inputChannels);
         };
 
         // ===================================================================
@@ -2086,6 +2141,7 @@ namespace dsp
 {
     void InitFftBindings(Napi::Env env, Napi::Object exports);
     Napi::Object InitMatrixBindings(Napi::Env env, Napi::Object exports);
+    void RegisterFilterBankDesignBindings(Napi::Env env, Napi::Object exports);
     namespace bindings
     {
         Napi::Object InitUtilityBindings(Napi::Env env, Napi::Object exports);
@@ -2103,6 +2159,9 @@ Napi::Object InitAll(Napi::Env env, Napi::Object exports)
 
     // Initialize FIR/IIR filter bindings
     dsp::InitFilterBindings(env, exports);
+
+    // Initialize filter bank design utilities
+    dsp::RegisterFilterBankDesignBindings(env, exports);
 
     // Initialize matrix analysis bindings (PCA, ICA, Whitening)
     dsp::InitMatrixBindings(env, exports);

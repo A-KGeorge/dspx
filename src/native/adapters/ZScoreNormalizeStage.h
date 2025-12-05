@@ -9,7 +9,6 @@
 #include <cmath>
 #include <numeric>   // For std::accumulate
 #include <algorithm> // For std::max
-#include <iostream>  // For optional debug logging
 
 namespace dsp::adapters
 {
@@ -257,24 +256,6 @@ namespace dsp::adapters
                     // setState takes (buffer, sum, sumOfSquares) - 3 separate params
                     m_filters[i].setState(bufferData, runningSum, runningSumOfSquares);
                 }
-
-// Debug: emit simple checksum to verify restored state
-#ifdef _WIN32
-                if (std::getenv("DSPX_DEBUG_TOON") != nullptr)
-                {
-                    double sum0 = 0.0;
-                    if (!m_filters.empty())
-                    {
-                        auto st = m_filters[0].getState();
-                        for (float v : st.first)
-                            sum0 += v;
-                    }
-                    std::cout << "[TOON] ZScore restored: channels=" << numChannels
-                              << ", win=" << m_window_size
-                              << ", eps=" << m_epsilon
-                              << ", sum(ch0)=" << sum0 << std::endl;
-                }
-#endif
             }
         }
 

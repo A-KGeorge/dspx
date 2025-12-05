@@ -35,6 +35,7 @@ import type {
   ChannelSelectorParams,
   ChannelSelectParams,
   ChannelMergeParams,
+  FilterBankParams,
   ClipDetectionParams,
   PeakDetectionParams,
   CspTransformParams,
@@ -1650,6 +1651,81 @@ class DspProcessor {
     this.nativeInstance.addStage("channelMerge", params);
     this.stages.push(
       `channelMerge:${params.numInputChannels}ch→${params.mapping.length}ch`
+    );
+    return this;
+  }
+
+  /**
+   * Apply a bank of IIR filters to split each input channel into multiple frequency bands.
+   *
+   * Implements frequency decomposition for:
+   * - Speech recognition: Mel-scale filter banks (20-40 bands)
+   * - Audio compression: Bark-scale psychoacoustic analysis
+   * - Musical analysis: Octave bands (log scale)
+   * - Research: Linear-scale frequency analysis
+   *
+   * Architecture:
+   * - Input: N channels (interleaved)
+   * - Output: N × M channels (interleaved, channel-major layout)
+   * - Layout: All bands for channel 1, then all bands for channel 2, etc.
+   *
+   * @param params - Filter bank parameters
+   * @param params.definitions - Array of filter definitions (one per band)
+   * @param params.inputChannels - Number of input channels
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If definitions or inputChannels are missing
+   * @throws {RangeError} If inputChannels <= 0 or definitions is empty
+   *
+   * @example
+   * // Design a 24-band Mel-scale filter bank for speech
+   * import { FilterBankDesign } from 'dspx';
+   *
+   * const melBank = FilterBankDesign.createMel(24, 16000, [100, 8000]);
+   * pipeline.FilterBank({
+   *   definitions: melBank,
+   *   inputChannels: 1
+   * });
+   * // Output: 24 channels (one per Mel band)
+   *
+   * @example
+   * // Custom 10-band octave filter bank for stereo input
+   * const octaveBank = FilterBankDesign.createLog(10, 44100, [20, 20000]);
+   * pipeline.FilterBank({
+   *   definitions: octaveBank,
+   *   inputChannels: 2
+   * });
+   * // Output: 20 channels (10 bands × 2 input channels)
+   */
+  FilterBank(params: FilterBankParams): this {
+    if (!Array.isArray(params.definitions) || params.definitions.length === 0) {
+      throw new TypeError("FilterBank: definitions must be a non-empty array");
+    }
+    if (!Number.isInteger(params.inputChannels) || params.inputChannels <= 0) {
+      throw new RangeError(
+        "FilterBank: inputChannels must be a positive integer"
+      );
+    }
+
+    // Validate each filter definition
+    for (let i = 0; i < params.definitions.length; i++) {
+      const def = params.definitions[i];
+      if (!Array.isArray(def.b) || def.b.length === 0) {
+        throw new TypeError(
+          `FilterBank: definition[${i}].b must be a non-empty array`
+        );
+      }
+      if (!Array.isArray(def.a) || def.a.length === 0) {
+        throw new TypeError(
+          `FilterBank: definition[${i}].a must be a non-empty array`
+        );
+      }
+    }
+
+    this.nativeInstance.addStage("filterBank", params);
+    const outputChannels = params.inputChannels * params.definitions.length;
+    this.stages.push(
+      `filterBank:${params.definitions.length}bands×${params.inputChannels}ch=${outputChannels}ch`
     );
     return this;
   }
@@ -4350,3 +4426,16 @@ export function calculateCommonSpatialPatterns(
     numFilters
   );
 }
+
+// ============================================================================
+// Filter Bank Design
+// ============================================================================
+
+export type { FilterBankParams, FilterDefinition } from "./types.js";
+export { FilterBankDesign } from "./FilterBankDesign.js";
+export type {
+  FilterBankOptions,
+  FilterCoefficients,
+  FilterScale,
+  FilterBankType,
+} from "./FilterBankDesign.js";

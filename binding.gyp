@@ -19,6 +19,7 @@
         "src/native/core/IirFilter.cc",
         "src/native/FftBindings.cc",
         "src/native/FilterBindings.cc",
+        "src/native/FilterBankDesignBindings.cc",
         "src/native/MatrixBindings.cc",
         "src/native/UtilityBindings.cc",
         "src/native/utils/CircularBufferArray.cc",
@@ -27,6 +28,7 @@
         "src/native/utils/SlidingWindowFilter.cc",
         "src/native/utils/TimeSeriesBuffer.cc",
         "src/native/adapters/FilterStage.cc",
+        "src/native/adapters/FilterBankStage.cc",
         "src/native/adapters/FftStage.cc"
       ],
       "include_dirs": [

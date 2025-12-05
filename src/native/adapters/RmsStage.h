@@ -9,8 +9,7 @@
 #include <cmath>
 #include <string>
 #include <algorithm>
-#include <numeric>  // For std::accumulate
-#include <iostream> // For optional debug logging
+#include <numeric> // For std::accumulate
 
 namespace dsp::adapters
 {
@@ -246,23 +245,6 @@ namespace dsp::adapters
 
                     m_filters[i].setState(bufferData, runningSumOfSquares);
                 }
-
-// Debug: emit simple checksum to verify restored state
-#ifdef _WIN32
-                if (std::getenv("DSPX_DEBUG_TOON") != nullptr)
-                {
-                    double sum0 = 0.0;
-                    if (!m_filters.empty())
-                    {
-                        auto st = m_filters[0].getState();
-                        for (float v : st.first)
-                            sum0 += v;
-                    }
-                    std::cout << "[TOON] RMS restored: channels=" << numChannels
-                              << ", win=" << m_window_size
-                              << ", sum(ch0)=" << sum0 << std::endl;
-                }
-#endif
             }
         }
 

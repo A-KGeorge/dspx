@@ -1061,6 +1061,42 @@ export interface ChannelMergeParams {
 }
 
 /**
+ * Filter definition for a single frequency band in a filter bank
+ */
+export interface FilterDefinition {
+  /** Feedforward coefficients (numerator) */
+  b: number[];
+  /** Feedback coefficients (denominator) */
+  a: number[];
+}
+
+/**
+ * Parameters for Filter Bank stage
+ *
+ * Splits N input channels into N × M sub-bands using IIR filters.
+ * Output layout is channel-major: all bands for channel 1, then all bands for channel 2, etc.
+ *
+ * @example
+ * // 2 input channels → 20 output channels (10 bands per channel)
+ * // Input:  [L, R, L, R, ...]
+ * // Output: [L_B1, L_B2, ..., L_B10, R_B1, R_B2, ..., R_B10, ...]
+ */
+export interface FilterBankParams {
+  /**
+   * Array of filter definitions (one per frequency band)
+   * Each definition contains b (feedforward) and a (feedback) coefficients
+   * Use FilterBankDesign.design() to generate these automatically
+   */
+  definitions: FilterDefinition[];
+
+  /**
+   * Number of input channels
+   * Output will have inputChannels × definitions.length channels
+   */
+  inputChannels: number;
+}
+
+/**
  * Parameters for Clip Detection stage
  */
 export interface ClipDetectionParams {

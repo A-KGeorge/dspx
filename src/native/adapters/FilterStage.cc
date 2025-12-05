@@ -423,44 +423,6 @@ namespace dsp::adapters
                 }
             }
         }
-
-// Debug: emit simple checksum to verify restored state
-#ifdef _WIN32
-        if (std::getenv("DSPX_DEBUG_TOON") != nullptr)
-        {
-            if (m_isFir)
-            {
-                double sum0 = 0.0;
-                if (!m_firFilters.empty())
-                {
-                    auto st = m_firFilters[0]->getState();
-                    for (float v : st.first)
-                        sum0 += v;
-                }
-                std::cout << "[TOON] FIR restored: channels=" << numChannels
-                          << ", bSize=" << m_bCoeffs.size()
-                          << ", aSize=" << m_aCoeffs.size()
-                          << ", sum(state0)=" << sum0 << std::endl;
-            }
-            else
-            {
-                double sumx0 = 0.0, sumy0 = 0.0;
-                if (!m_iirFilters.empty())
-                {
-                    auto st = m_iirFilters[0]->getState();
-                    for (float v : st.first)
-                        sumx0 += v;
-                    for (float v : st.second)
-                        sumy0 += v;
-                }
-                std::cout << "[TOON] IIR restored: channels=" << numChannels
-                          << ", bSize=" << m_bCoeffs.size()
-                          << ", aSize=" << m_aCoeffs.size()
-                          << ", sum(x0)=" << sumx0
-                          << ", sum(y0)=" << sumy0 << std::endl;
-            }
-        }
-#endif
     }
 
 } // namespace dsp::adapters

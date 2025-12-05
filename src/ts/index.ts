@@ -104,6 +104,7 @@ export {
 } from "./advanced-dsp.js";
 export { egg, credits } from "./easter-egg.js";
 export { dotProduct, DspUtils } from "./utils.js";
+export { FilterBankDesign } from "./bindings.js";
 export type {
   DriftStatistics,
   DriftDetectorOptions,
@@ -155,6 +156,12 @@ export type {
   WaveletTransformParams,
   HilbertEnvelopeParams,
 } from "./types.js";
+export type {
+  FilterBankOptions,
+  FilterCoefficients,
+  FilterScale,
+  FilterBankType,
+} from "./bindings.js";
 export type {
   RouteHandler,
   Route,
