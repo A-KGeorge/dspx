@@ -7,9 +7,6 @@ namespace dsp::adapters
     FilterBankStage::FilterBankStage(const std::vector<FilterDefinition> &definitions, int numInputChannels)
         : m_definitions(definitions), m_numInputChannels(numInputChannels)
     {
-        std::cout << "[FilterBankStage] Constructor: " << definitions.size() << " bands, "
-                  << numInputChannels << " channels" << std::endl;
-
         if (definitions.empty())
         {
             throw std::runtime_error("FilterBank: definitions cannot be empty");
@@ -20,33 +17,22 @@ namespace dsp::adapters
         }
 
         initializeFilters();
-        std::cout << "[FilterBankStage] Constructor complete" << std::endl;
     }
-
     FilterBankStage::~FilterBankStage()
     {
-        std::cout << "[FilterBankStage] Destructor start: " << m_filters.size() << " channels, "
-                  << (m_filters.empty() ? 0 : m_filters[0].size()) << " bands" << std::endl;
-
         try
         {
             // Explicitly clear filters first to ensure IirFilter destructors run
             // before scratch buffers are destroyed
             for (size_t ch = 0; ch < m_filters.size(); ++ch)
             {
-                std::cout << "[FilterBankStage] Clearing channel " << ch << " ("
-                          << m_filters[ch].size() << " filters)" << std::endl;
                 m_filters[ch].clear(); // Destroys all unique_ptrs in this channel
             }
-            std::cout << "[FilterBankStage] Clearing filter matrix" << std::endl;
             m_filters.clear(); // Clear outer vector
 
             // Clear scratch buffers
-            std::cout << "[FilterBankStage] Clearing scratch buffers" << std::endl;
             m_planarInput.clear();
             m_planarOutput.clear();
-
-            std::cout << "[FilterBankStage] Destructor complete" << std::endl;
         }
         catch (const std::exception &e)
         {
@@ -62,108 +48,54 @@ namespace dsp::adapters
                                           float *outputBuffer, size_t &outputSize,
                                           int numChannels, const float *timestamps)
     {
-        std::cout << "[FilterBankStage] processResizing: inputSize=" << inputSize
-                  << ", numChannels=" << numChannels << std::endl;
-
         if (numChannels != m_numInputChannels)
         {
             throw std::runtime_error("FilterBank: Input channel mismatch");
         }
 
         size_t samplesPerChannel = inputSize / numChannels;
-        std::cout << "[FilterBankStage] samplesPerChannel=" << samplesPerChannel
-                  << ", bands=" << m_definitions.size() << std::endl;
         size_t numBands = m_definitions.size();
         size_t totalOutputChannels = numChannels * numBands;
 
         outputSize = samplesPerChannel * totalOutputChannels;
 
-        // 1. Ensure scratch buffers are properly sized (hot path optimized)
-        std::cout << "[FilterBankStage] Calling ensureScratchSize..." << std::endl;
         ensureScratchSize(samplesPerChannel);
-        std::cout << "[FilterBankStage] Scratch buffers ready" << std::endl;
 
-        // 2. De-interleave Input (Convert Interleaved → Planar)
-        // Use vector of pointers for SimdOps API compatibility
-        std::cout << "[FilterBankStage] Preparing input pointers..." << std::endl;
         std::vector<float *> inputPtrs(numChannels);
         for (int i = 0; i < numChannels; ++i)
         {
             inputPtrs[i] = m_planarInput[i].data();
-            if (inputPtrs[i] == nullptr)
-            {
-                std::cerr << "[FilterBankStage] ERROR: inputPtrs[" << i << "] is nullptr!" << std::endl;
-            }
         }
 
-        std::cout << "[FilterBankStage] De-interleaving (numChannels=" << numChannels << ")..." << std::endl;
         if (numChannels == 2)
         {
-            // Specialized SIMD path for stereo
-            std::cout << "[FilterBankStage] Using stereo deinterleave" << std::endl;
             dsp::simd::deinterleave2Ch(inputBuffer, inputPtrs[0], inputPtrs[1], samplesPerChannel);
         }
         else
         {
-            // Generic N-channel path
-            std::cout << "[FilterBankStage] Using N-channel deinterleave" << std::endl;
             dsp::simd::deinterleaveNCh(inputBuffer, inputPtrs.data(), numChannels, samplesPerChannel);
         }
-        std::cout << "[FilterBankStage] De-interleave complete" << std::endl;
 
-        std::cout << "[FilterBankStage] De-interleave complete" << std::endl;
-
-        // 3. Process Filters (Planar → Planar)
-        // Cache-efficient: Memory is contiguous for each channel's planar data
-        std::cout << "[FilterBankStage] Processing filters (channels=" << numChannels
-                  << ", bands=" << numBands << ")..." << std::endl;
         for (int ch = 0; ch < numChannels; ++ch)
         {
-            std::cout << "[FilterBankStage] Processing channel " << ch << std::endl;
             for (size_t band = 0; band < numBands; ++band)
             {
-                // Calculate linear output index in channel-major order:
-                // Channel 0: [Band 0, Band 1, ..., Band M-1]
-                // Channel 1: [Band 0, Band 1, ..., Band M-1]
                 int outChIndex = (ch * static_cast<int>(numBands)) + static_cast<int>(band);
 
-                // Validate pointers before filter processing
-                if (m_planarInput[ch].data() == nullptr)
-                {
-                    std::cerr << "[FilterBankStage] ERROR: m_planarInput[" << ch << "] is nullptr!" << std::endl;
-                }
-                if (m_planarOutput[outChIndex].data() == nullptr)
-                {
-                    std::cerr << "[FilterBankStage] ERROR: m_planarOutput[" << outChIndex << "] is nullptr!" << std::endl;
-                }
-
-                // Process filter on contiguous planar data
                 m_filters[ch][band]->process(
                     m_planarInput[ch].data(),
                     m_planarOutput[outChIndex].data(),
                     samplesPerChannel);
             }
         }
-        std::cout << "[FilterBankStage] Filter processing complete" << std::endl;
 
-        std::cout << "[FilterBankStage] Filter processing complete" << std::endl;
-
-        // 4. Interleave Output (Convert Planar → Interleaved)
-        std::cout << "[FilterBankStage] Preparing output pointers (totalOutputChannels="
-                  << totalOutputChannels << ")..." << std::endl;
         std::vector<const float *> outputPtrs(totalOutputChannels);
         for (size_t i = 0; i < totalOutputChannels; ++i)
         {
             outputPtrs[i] = m_planarOutput[i].data();
-            if (outputPtrs[i] == nullptr)
-            {
-                std::cerr << "[FilterBankStage] ERROR: outputPtrs[" << i << "] is nullptr!" << std::endl;
-            }
         }
 
-        std::cout << "[FilterBankStage] Interleaving output..." << std::endl;
         dsp::simd::interleaveNCh(outputPtrs.data(), outputBuffer, static_cast<int>(totalOutputChannels), samplesPerChannel);
-        std::cout << "[FilterBankStage] processResizing complete, outputSize=" << outputSize << std::endl;
     }
 
     void FilterBankStage::initializeFilters()
@@ -187,45 +119,31 @@ namespace dsp::adapters
 
     void FilterBankStage::ensureScratchSize(size_t samplesPerChannel)
     {
-        std::cout << "[FilterBankStage] ensureScratchSize: samplesPerChannel=" << samplesPerChannel << std::endl;
-
-        // Ensure input buffers exist and are large enough
         if (m_planarInput.size() != static_cast<size_t>(m_numInputChannels))
         {
-            std::cout << "[FilterBankStage] Resizing planarInput from " << m_planarInput.size()
-                      << " to " << m_numInputChannels << std::endl;
             m_planarInput.resize(m_numInputChannels);
         }
         for (size_t i = 0; i < m_planarInput.size(); ++i)
         {
             if (m_planarInput[i].size() < samplesPerChannel)
             {
-                std::cout << "[FilterBankStage] Resizing planarInput[" << i << "] from "
-                          << m_planarInput[i].size() << " to " << samplesPerChannel << std::endl;
-                m_planarInput[i].resize(samplesPerChannel, 0.0f); // Initialize with zeros
+                m_planarInput[i].resize(samplesPerChannel, 0.0f);
             }
         }
 
-        // Ensure output buffers exist and are large enough
         size_t numOut = m_numInputChannels * m_definitions.size();
-        std::cout << "[FilterBankStage] Output channels needed: " << numOut << std::endl;
 
         if (m_planarOutput.size() != numOut)
         {
-            std::cout << "[FilterBankStage] Resizing planarOutput from " << m_planarOutput.size()
-                      << " to " << numOut << std::endl;
             m_planarOutput.resize(numOut);
         }
         for (size_t i = 0; i < m_planarOutput.size(); ++i)
         {
             if (m_planarOutput[i].size() < samplesPerChannel)
             {
-                std::cout << "[FilterBankStage] Resizing planarOutput[" << i << "] from "
-                          << m_planarOutput[i].size() << " to " << samplesPerChannel << std::endl;
-                m_planarOutput[i].resize(samplesPerChannel, 0.0f); // Initialize with zeros
+                m_planarOutput[i].resize(samplesPerChannel, 0.0f);
             }
         }
-        std::cout << "[FilterBankStage] ensureScratchSize complete" << std::endl;
     }
 
     void FilterBankStage::reset()

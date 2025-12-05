@@ -601,22 +601,34 @@ export type WaveletType =
  *
  * @param signal - Input signal
  * @param wavelet - Wavelet type (e.g., 'haar', 'db4', 'db10')
- * @returns Array containing [approximation, detail] coefficients
+ * @returns Promise resolving to array containing [approximation, detail] coefficients
  *
  * @example
  * ```typescript
  * const signal = new Float32Array([1, 2, 3, 4, 5, 4, 3, 2, 1]);
- * const result = dwt(signal, 'db4');
+ * const result = await dwt(signal, 'db4');
  * console.log('Approximation:', result.slice(0, result.length / 2));
  * console.log('Detail:', result.slice(result.length / 2));
  * ```
  */
-export function dwt(signal: Float32Array, wavelet: WaveletType): Float32Array {
-  // Note: This would be a native binding to the C++ WaveletTransformStage
-  // For now, returning a placeholder
-  throw new Error(
-    "DWT is implemented as a pipeline stage. Use pipeline.addStage('waveletTransform', { wavelet: 'db4' })"
-  );
+export async function dwt(
+  signal: Float32Array,
+  wavelet: WaveletType
+): Promise<Float32Array> {
+  // Use pipeline infrastructure for computation
+  const { createDspPipeline } = await import("./bindings.js");
+  const processor = createDspPipeline();
+
+  try {
+    processor.WaveletTransform({ wavelet });
+    const result = processor.processSync(signal, {
+      channels: 1,
+      sampleRate: 44100, // Sample rate doesn't affect wavelet decomposition
+    });
+    return result;
+  } finally {
+    processor.dispose();
+  }
 }
 
 /**
@@ -640,24 +652,35 @@ export function dwt(signal: Float32Array, wavelet: WaveletType): Float32Array {
  * @param signal - Input signal
  * @param windowSize - FFT window size (power of 2 recommended)
  * @param hopSize - Samples to advance between windows (default: windowSize/2)
- * @returns Envelope values
+ * @returns Promise resolving to envelope values
  *
  * @example
  * ```typescript
  * // Detect amplitude modulation
  * const signal = new Float32Array(1024);
  * // ... fill with modulated signal
- * const envelope = hilbertEnvelope(signal, 256, 128);
+ * const envelope = await hilbertEnvelope(signal, 256, 128);
  * ```
  */
-export function hilbertEnvelope(
+export async function hilbertEnvelope(
   signal: Float32Array,
   windowSize: number = 512,
   hopSize?: number
-): Float32Array {
-  // Note: This would be a native binding to the C++ HilbertEnvelopeStage
-  // For now, returning a placeholder
-  throw new Error(
-    "Hilbert envelope is implemented as a pipeline stage. Use pipeline.addStage('hilbertEnvelope', { windowSize: 512, hopSize: 256 })"
-  );
+): Promise<Float32Array> {
+  // Use pipeline infrastructure for computation
+  const { createDspPipeline } = await import("./bindings.js");
+  const processor = createDspPipeline();
+
+  try {
+    const params =
+      hopSize !== undefined ? { windowSize, hopSize } : { windowSize };
+    processor.HilbertEnvelope(params);
+    const result = processor.processSync(signal, {
+      channels: 1,
+      sampleRate: 44100, // Sample rate doesn't affect envelope computation
+    });
+    return result;
+  } finally {
+    processor.dispose();
+  }
 }
