@@ -1,5 +1,11 @@
 # dspx
 
+## 1.3.0
+
+### Minor Changes
+
+- [`cbab263`](https://github.com/A-KGeorge/dspx/commit/cbab2634a5b7a9831ae655c718fc6847a06961c3) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Added multi-threading support and filterbanks
+
 ## 1.2.4
 
 ### Patch Changes
