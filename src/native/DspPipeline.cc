@@ -33,6 +33,8 @@
 #include "adapters/ClipDetectionStage.h"            // Clip detection stage
 #include "adapters/PeakDetectionStage.h"            // Peak detection stage
 #include "adapters/DifferentiatorStage.h"           // Differentiator stage
+#include "adapters/SquareStage.h"                   // Square stage
+#include "adapters/AmplifyStage.h"                  // Amplify (Gain) stage
 #include "adapters/IntegratorStage.h"               // Integrator stage
 #include "adapters/SnrStage.h"                      // SNR stage
 
@@ -1010,6 +1012,33 @@ namespace dsp
             return std::make_unique<dsp::adapters::DifferentiatorStage>();
         };
 
+        // ===================================================================
+        // Square Stage
+        // ===================================================================
+        m_stageFactories["square"] = [](const Napi::Object &params)
+        {
+            // Stateless operation - no parameters needed
+            return std::make_unique<dsp::adapters::SquareStage>();
+        };
+
+        // Amplify (Gain) stage
+        m_stageFactories["amplify"] = [](const Napi::Object &params)
+        {
+            float gain = 1.0f; // Default gain (no change)
+
+            if (params.Has("gain"))
+            {
+                gain = params.Get("gain").As<Napi::Number>().FloatValue();
+
+                if (gain <= 0.0f)
+                {
+                    throw std::invalid_argument("Amplify gain must be positive");
+                }
+            }
+
+            return std::make_unique<dsp::adapters::AmplifyStage>(gain);
+        };
+
         // Integrator stage (IIR leaky integrator)
         m_stageFactories["integrator"] = [](const Napi::Object &params)
         {
@@ -1727,16 +1756,13 @@ namespace dsp
             return stringify.Call(JSON, {stateObj});
         }
     }
+
     /**
-     * Load pipeline state from JSON string or TOON Buffer with Smart Merge Strategy.
-     * * Logic:
-     * 1. Iterate through the saved state history.
-     * 2. If a saved stage matches the current pipeline's next stage (by type),
-     * restore the state into the existing stage instance.
-     * 3. If there is a mismatch (e.g. saved has 'Rectify' but current has 'Filter'),
-     * dynamically create the 'Rectify' stage using the factory and insert it.
-     * 4. Finally, append any remaining stages from the current pipeline definition.
-     * * Result: The pipeline becomes a fusion of [Restorable Saved Stages] + [Current Stages]
+     * Load pipeline state from JSON string or TOON Buffer with inline validation.
+     * NEW BEHAVIOR: Only loads state if saved stages match current stages EXACTLY.
+     * This prevents pipeline corruption from incompatible state.
+     *
+     * If stage types or count don't match, throws an error instead of trying to merge.
      */
     Napi::Value DspPipeline::LoadState(const Napi::CallbackInfo &info)
     {
@@ -1794,72 +1820,69 @@ namespace dsp
                 int32_t savedStageCount = deserializer.readInt32();
                 key = deserializer.readString();
                 deserializer.consumeToken(dsp::toon::T_ARRAY_START);
-                std::vector<std::unique_ptr<IDspStage>> newStages;
-                size_t currentIdx = 0;
-                if (debugToon)
-                {
-                    std::cout << "[TOON] Loading pipeline: savedStageCount=" << savedStageCount
-                              << ", currentStageCount=" << m_stages.size() << std::endl;
-                }
+
+                // SIMPLER APPROACH: Validate and load in a single pass
+                // For each saved stage, check type matches before deserializing
+                size_t stageIdx = 0;
                 while (deserializer.peekToken() != dsp::toon::T_ARRAY_END)
                 {
+                    // Check we haven't exceeded current stage count
+                    if (stageIdx >= m_stages.size())
+                    {
+                        throw std::runtime_error("TOON Load: Stage count mismatch. Saved state has more stages than current pipeline (" +
+                                                 std::to_string(m_stages.size()) + ").");
+                    }
+
                     deserializer.consumeToken(dsp::toon::T_OBJECT_START);
-                    deserializer.readString();
+                    deserializer.readString(); // "type" key
                     std::string savedType = deserializer.readString();
-                    deserializer.readString();
-                    bool matched = false;
-                    if (currentIdx < m_stages.size())
+
+                    // Validate type matches BEFORE loading state
+                    std::string currentType = m_stages[stageIdx]->getType();
+                    if (currentType != savedType)
                     {
-                        if (std::string(m_stages[currentIdx]->getType()) == savedType)
-                        {
-                            if (debugToon)
-                            {
-                                std::cout << "[TOON] Match stage[" << currentIdx << "]: type='" << savedType << "'"
-                                          << std::endl;
-                            }
-                            m_stages[currentIdx]->deserializeToon(deserializer);
-                            newStages.push_back(std::move(m_stages[currentIdx]));
-                            currentIdx++;
-                            matched = true;
-                        }
+                        throw std::runtime_error("TOON Load: Stage type mismatch at index " +
+                                                 std::to_string(stageIdx) + ". Expected '" + currentType +
+                                                 "', got '" + savedType +
+                                                 "'. Cannot load incompatible state.");
                     }
-                    if (!matched)
-                    {
-                        if (debugToon)
-                        {
-                            std::cout << "[TOON] Mismatch or extra saved stage: type='" << savedType
-                                      << "', creating via factory" << std::endl;
-                        }
-                        auto it = m_stageFactories.find(savedType);
-                        if (it != m_stageFactories.end())
-                        {
-                            auto fresh = it->second(Napi::Object::New(env));
-                            fresh->deserializeToon(deserializer);
-                            newStages.push_back(std::move(fresh));
-                        }
-                        else
-                        {
-                            throw std::runtime_error("TOON Load: Unknown stage type '" + savedType + "'.");
-                        }
-                    }
-                    deserializer.consumeToken(dsp::toon::T_OBJECT_END);
-                }
-                deserializer.consumeToken(dsp::toon::T_ARRAY_END);
-                deserializer.consumeToken(dsp::toon::T_OBJECT_END);
-                while (currentIdx < m_stages.size())
-                {
+
+                    deserializer.readString(); // "state" key
+
                     if (debugToon)
                     {
-                        std::cout << "[TOON] Appending remaining current stage[" << currentIdx << "]: type='"
-                                  << m_stages[currentIdx]->getType() << "'" << std::endl;
+                        std::cout << "[TOON] Loading state into stage[" << stageIdx
+                                  << "]: type='" << savedType << "'" << std::endl;
                     }
-                    newStages.push_back(std::move(m_stages[currentIdx]));
-                    currentIdx++;
+
+                    // Deserialize directly into the existing stage
+                    m_stages[stageIdx]->deserializeToon(deserializer);
+
+                    deserializer.consumeToken(dsp::toon::T_OBJECT_END);
+                    stageIdx++;
                 }
-                m_stages = std::move(newStages);
+
+                // Verify we loaded all current stages
+                if (stageIdx != m_stages.size())
+                {
+                    throw std::runtime_error("TOON Load: Stage count mismatch. Saved state has " +
+                                             std::to_string(stageIdx) + " stages, current has " +
+                                             std::to_string(m_stages.size()) + ".");
+                }
+
                 if (debugToon)
                 {
-                    std::cout << "[TOON] Load complete. Final stageCount=" << m_stages.size() << std::endl;
+                    std::cout << "[TOON] Validation passed and loaded " << stageIdx
+                              << " stages successfully" << std::endl;
+                }
+
+                deserializer.consumeToken(dsp::toon::T_ARRAY_END);
+                deserializer.consumeToken(dsp::toon::T_OBJECT_END);
+
+                if (debugToon)
+                {
+                    std::cout << "[TOON] Load complete. Restored state into "
+                              << stageIdx << " stages" << std::endl;
                 }
                 return Napi::Boolean::New(env, true);
             }

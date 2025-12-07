@@ -1362,4 +1362,71 @@ namespace dsp::simd
     }
 
     // SIMD_X86 removed since SIMD_SSE3 covers it for most of the modern devices
+    /**
+     * @brief Apply square (x^2) in-place.
+     * Essential for Pan-Tompkins QRS detection to amplify signal peaks.
+     * @param buffer Input/output buffer (modified in-place)
+     * @param size Number of elements
+     */
+    inline void square_inplace(float *buffer, size_t size)
+    {
+#if defined(SIMD_AVX2)
+        const size_t simd_width = 8;
+        const size_t simd_count = size / simd_width;
+        const size_t simd_end = simd_count * simd_width;
+
+        for (size_t i = 0; i < simd_end; i += simd_width)
+        {
+            __m256 values = _mm256_loadu_ps(&buffer[i]);
+            __m256 result = _mm256_mul_ps(values, values); // x * x
+            _mm256_storeu_ps(&buffer[i], result);
+        }
+
+        for (size_t i = simd_end; i < size; ++i)
+        {
+            buffer[i] = buffer[i] * buffer[i];
+        }
+
+#elif defined(SIMD_SSE2)
+        const size_t simd_width = 4;
+        const size_t simd_count = size / simd_width;
+        const size_t simd_end = simd_count * simd_width;
+
+        for (size_t i = 0; i < simd_end; i += simd_width)
+        {
+            __m128 values = _mm_loadu_ps(&buffer[i]);
+            __m128 result = _mm_mul_ps(values, values);
+            _mm_storeu_ps(&buffer[i], result);
+        }
+
+        for (size_t i = simd_end; i < size; ++i)
+        {
+            buffer[i] = buffer[i] * buffer[i];
+        }
+
+#elif defined(SIMD_NEON)
+        const size_t simd_width = 4;
+        const size_t simd_count = size / simd_width;
+        const size_t simd_end = simd_count * simd_width;
+
+        for (size_t i = 0; i < simd_end; i += simd_width)
+        {
+            float32x4_t values = vld1q_f32(&buffer[i]);
+            float32x4_t result = vmulq_f32(values, values);
+            vst1q_f32(&buffer[i], result);
+        }
+
+        for (size_t i = simd_end; i < size; ++i)
+        {
+            buffer[i] = buffer[i] * buffer[i];
+        }
+
+#else
+        // Scalar fallback
+        for (size_t i = 0; i < size; ++i)
+        {
+            buffer[i] = buffer[i] * buffer[i];
+        }
+#endif
+    }
 } // namespace dsp::simd

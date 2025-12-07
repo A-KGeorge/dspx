@@ -1911,6 +1911,71 @@ class DspProcessor {
   }
 
   /**
+   * Apply element-wise squaring to the signal.
+   *
+   * Implements: y[n] = x[n]²
+   *
+   * Squaring is commonly used for:
+   * - Energy/power calculation
+   * - Non-linear signal transformation
+   * - Envelope detection
+   * - Part of Pan-Tompkins QRS detection algorithm (ECG)
+   *
+   * **Note:** Amplifies large values and suppresses small ones.
+   * This stage is stateless - no mode selection needed.
+   *
+   * @returns this instance for method chaining
+   *
+   * @example
+   * // Calculate signal power
+   * pipeline.Square();
+   *
+   * @example
+   * // Pan-Tompkins QRS detection
+   * pipeline
+   *   .ButterworthBandpass({ lowCutoff: 5, highCutoff: 15, order: 2, sampleRate: 360 })
+   *   .Differentiator()
+   *   .Square()
+   *   .MovingAverage({ mode: "moving", windowSize: 30 });
+   */
+  Square(): this {
+    this.nativeInstance.addStage("square", {});
+    this.stages.push("square");
+    return this;
+  }
+
+  /**
+   * Amplify (scale) the signal by a constant gain factor.
+   *
+   * Multiplies all samples by the gain value: y[n] = gain * x[n]
+   *
+   * Use cases:
+   * - Scale signals to appropriate amplitude ranges for peak detection
+   * - Compensate for sensor attenuation
+   * - Normalize signal levels between processing stages
+   *
+   * @param params - Amplification parameters
+   * @param params.gain - Gain factor (must be positive). Default: 1.0
+   * @returns this (for method chaining)
+   *
+   * @example
+   * // Amplify signal by 1000x for better peak detection sensitivity
+   * pipeline.Amplify({ gain: 1000 });
+   *
+   * @example
+   * // Attenuate signal by 50%
+   * pipeline.Amplify({ gain: 0.5 });
+   */
+  Amplify(params: { gain: number }): this {
+    if (params.gain <= 0) {
+      throw new Error("Amplify gain must be positive");
+    }
+    this.nativeInstance.addStage("amplify", params);
+    this.stages.push(`amplify:${params.gain}`);
+    return this;
+  }
+
+  /**
    * Apply leaky integration (accumulation) using IIR filter.
    *
    * Implements: y[n] = x[n] + α * y[n-1]
