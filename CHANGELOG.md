@@ -1,5 +1,11 @@
 # dspx
 
+## 1.3.1
+
+### Patch Changes
+
+- [`bf02fde`](https://github.com/A-KGeorge/dspx/commit/bf02fde8473380168e522e7886effea1c5385010) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Added Square and Amplify stages
+
 ## 1.3.0
 
 ### Minor Changes
