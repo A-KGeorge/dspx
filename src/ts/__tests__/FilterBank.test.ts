@@ -32,6 +32,25 @@ describe("Filter Bank Stage", () => {
     // Brief async delay for N-API cleanup
     await new Promise((resolve) => setImmediate(resolve));
   });
+
+  process.on("exit", (code) => {
+    if (code !== 0) {
+      console.error(
+        `Process exiting with code: ${code} (0x${code
+          .toString(16)
+          .toUpperCase()})`
+      );
+    }
+  });
+
+  process.on("uncaughtException", (err: any) => {
+    console.error("Uncaught exception:", err);
+    if (err.code) {
+      console.error(`Error code: ${err.code}`);
+    }
+    process.exit(1);
+  });
+
   describe("Basic Functionality", () => {
     test("should split mono signal into multiple bands", async () => {
       const melBank = FilterBankDesign.createMel(4, 16000, [100, 4000]);
@@ -99,7 +118,7 @@ describe("Filter Bank Stage", () => {
 
     // NOTE: Test "should handle different filter bank scales" removed due to Node.js test runner
     // N-API cleanup timing issues. The test creates 4 processors in rapid succession which triggers
-    // non-deterministic crashes in the test runner (not in the C++ code itself).
+    // non-deterministic crashes in the test runner (EXIT CODE 0xC0000005 - ACCESS_VIOLATION).
     // Individual scale tests work fine - see test-minimal-filterbank.js for validation.
   });
 

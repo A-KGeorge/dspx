@@ -1,5 +1,4 @@
 #include "FilterBankStage.h"
-#include <iostream>
 
 namespace dsp::adapters
 {
@@ -17,31 +16,6 @@ namespace dsp::adapters
         }
 
         initializeFilters();
-    }
-    FilterBankStage::~FilterBankStage()
-    {
-        try
-        {
-            // Explicitly clear filters first to ensure IirFilter destructors run
-            // before scratch buffers are destroyed
-            for (size_t ch = 0; ch < m_filters.size(); ++ch)
-            {
-                m_filters[ch].clear(); // Destroys all unique_ptrs in this channel
-            }
-            m_filters.clear(); // Clear outer vector
-
-            // Clear scratch buffers
-            m_planarInput.clear();
-            m_planarOutput.clear();
-        }
-        catch (const std::exception &e)
-        {
-            std::cerr << "[FilterBankStage] ERROR in destructor: " << e.what() << std::endl;
-        }
-        catch (...)
-        {
-            std::cerr << "[FilterBankStage] UNKNOWN ERROR in destructor" << std::endl;
-        }
     }
 
     void FilterBankStage::processResizing(const float *inputBuffer, size_t inputSize,
@@ -81,8 +55,9 @@ namespace dsp::adapters
             for (size_t band = 0; band < numBands; ++band)
             {
                 int outChIndex = (ch * static_cast<int>(numBands)) + static_cast<int>(band);
+                int filterIndex = outChIndex; // Same indexing for flat array
 
-                m_filters[ch][band]->process(
+                m_filters[filterIndex]->process(
                     m_planarInput[ch].data(),
                     m_planarOutput[outChIndex].data(),
                     samplesPerChannel);
@@ -100,18 +75,24 @@ namespace dsp::adapters
 
     void FilterBankStage::initializeFilters()
     {
-        m_filters.resize(m_numInputChannels);
+        size_t numBands = m_definitions.size();
+        size_t totalFilters = m_numInputChannels * numBands;
+
+        m_filters.clear();
+        m_filters.reserve(totalFilters);
+
         for (int ch = 0; ch < m_numInputChannels; ++ch)
         {
-            m_filters[ch].clear();
-            for (const auto &def : m_definitions)
+            for (size_t band = 0; band < numBands; ++band)
             {
+                const auto &def = m_definitions[band];
+
                 // Convert double coefficients to float for IirFilter
                 std::vector<float> b_float(def.b.begin(), def.b.end());
                 std::vector<float> a_float(def.a.begin(), def.a.end());
 
                 // Create stateful IIR filter for each band
-                m_filters[ch].push_back(
+                m_filters.push_back(
                     std::make_unique<dsp::core::IirFilter<float>>(b_float, a_float, true));
             }
         }
@@ -148,12 +129,9 @@ namespace dsp::adapters
 
     void FilterBankStage::reset()
     {
-        for (auto &ch : m_filters)
+        for (auto &filter : m_filters)
         {
-            for (auto &filter : ch)
-            {
-                filter->reset();
-            }
+            filter->reset();
         }
     }
 
@@ -165,13 +143,16 @@ namespace dsp::adapters
         state.Set("numBands", m_definitions.size());
 
         // Serialize filter states as nested arrays: channels[bands[state]]
-        Napi::Array channels = Napi::Array::New(env, m_filters.size());
-        for (size_t ch = 0; ch < m_filters.size(); ++ch)
+        size_t numBands = m_definitions.size();
+        Napi::Array channels = Napi::Array::New(env, m_numInputChannels);
+
+        for (int ch = 0; ch < m_numInputChannels; ++ch)
         {
-            Napi::Array bands = Napi::Array::New(env, m_filters[ch].size());
-            for (size_t band = 0; band < m_filters[ch].size(); ++band)
+            Napi::Array bands = Napi::Array::New(env, numBands);
+            for (size_t band = 0; band < numBands; ++band)
             {
-                const auto &filter = m_filters[ch][band];
+                int filterIndex = ch * numBands + band;
+                const auto &filter = m_filters[filterIndex];
 
                 Napi::Object filterState = Napi::Object::New(env);
 
@@ -210,22 +191,24 @@ namespace dsp::adapters
             throw std::runtime_error("FilterBank: Missing filterStates in serialized data");
         }
 
+        size_t numBands = m_definitions.size();
         Napi::Array channels = state.Get("filterStates").As<Napi::Array>();
-        if (channels.Length() != m_filters.size())
+        if (channels.Length() != static_cast<uint32_t>(m_numInputChannels))
         {
             throw std::runtime_error("FilterBank: Channel count mismatch in deserialization");
         }
 
-        for (size_t ch = 0; ch < channels.Length(); ++ch)
+        for (int ch = 0; ch < m_numInputChannels; ++ch)
         {
             Napi::Array bands = channels.Get(ch).As<Napi::Array>();
-            if (bands.Length() != m_filters[ch].size())
+            if (bands.Length() != static_cast<uint32_t>(numBands))
             {
                 throw std::runtime_error("FilterBank: Band count mismatch in deserialization");
             }
 
-            for (size_t band = 0; band < bands.Length(); ++band)
+            for (size_t band = 0; band < numBands; ++band)
             {
+                int filterIndex = ch * numBands + band;
                 Napi::Object filterState = bands.Get(band).As<Napi::Object>();
 
                 // Deserialize input history
@@ -253,7 +236,7 @@ namespace dsp::adapters
                 }
 
                 // Restore filter state
-                m_filters[ch][band]->setState(inputHistory, outputHistory);
+                m_filters[filterIndex]->setState(inputHistory, outputHistory);
             }
         }
     }
@@ -265,26 +248,23 @@ namespace dsp::adapters
         serializer.writeInt32(static_cast<int32_t>(m_definitions.size()));
 
         // Serialize each filter's state
-        for (const auto &ch : m_filters)
+        for (const auto &filter : m_filters)
         {
-            for (const auto &filter : ch)
+            // Get filter state (input and output history)
+            auto [inputHistory, outputHistory] = filter->getState();
+
+            // Write input history
+            serializer.writeInt32(static_cast<int32_t>(inputHistory.size()));
+            for (float val : inputHistory)
             {
-                // Get filter state (input and output history)
-                auto [inputHistory, outputHistory] = filter->getState();
+                serializer.writeFloat(val);
+            }
 
-                // Write input history
-                serializer.writeInt32(static_cast<int32_t>(inputHistory.size()));
-                for (float val : inputHistory)
-                {
-                    serializer.writeFloat(val);
-                }
-
-                // Write output history
-                serializer.writeInt32(static_cast<int32_t>(outputHistory.size()));
-                for (float val : outputHistory)
-                {
-                    serializer.writeFloat(val);
-                }
+            // Write output history
+            serializer.writeInt32(static_cast<int32_t>(outputHistory.size()));
+            for (float val : outputHistory)
+            {
+                serializer.writeFloat(val);
             }
         }
     }
@@ -305,31 +285,28 @@ namespace dsp::adapters
         }
 
         // Restore each filter's state
-        for (auto &ch : m_filters)
+        for (auto &filter : m_filters)
         {
-            for (auto &filter : ch)
+            // Read input history
+            int32_t inputSize = deserializer.readInt32();
+            std::vector<float> inputHistory;
+            inputHistory.reserve(inputSize);
+            for (int32_t i = 0; i < inputSize; ++i)
             {
-                // Read input history
-                int32_t inputSize = deserializer.readInt32();
-                std::vector<float> inputHistory;
-                inputHistory.reserve(inputSize);
-                for (int32_t i = 0; i < inputSize; ++i)
-                {
-                    inputHistory.push_back(deserializer.readFloat());
-                }
-
-                // Read output history
-                int32_t outputSize = deserializer.readInt32();
-                std::vector<float> outputHistory;
-                outputHistory.reserve(outputSize);
-                for (int32_t i = 0; i < outputSize; ++i)
-                {
-                    outputHistory.push_back(deserializer.readFloat());
-                }
-
-                // Restore filter state
-                filter->setState(inputHistory, outputHistory);
+                inputHistory.push_back(deserializer.readFloat());
             }
+
+            // Read output history
+            int32_t outputSize = deserializer.readInt32();
+            std::vector<float> outputHistory;
+            outputHistory.reserve(outputSize);
+            for (int32_t i = 0; i < outputSize; ++i)
+            {
+                outputHistory.push_back(deserializer.readFloat());
+            }
+
+            // Restore filter state
+            filter->setState(inputHistory, outputHistory);
         }
     }
 

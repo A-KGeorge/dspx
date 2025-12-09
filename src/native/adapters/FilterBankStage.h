@@ -50,11 +50,7 @@ namespace dsp::adapters
          * @param numInputChannels Number of input channels
          */
         FilterBankStage(const std::vector<FilterDefinition> &bandDefinitions, int numInputChannels);
-
-        /**
-         * @brief Destructor - ensures proper cleanup of filters and scratch buffers
-         */
-        virtual ~FilterBankStage();
+        ~FilterBankStage() = default;
 
         const char *getType() const override { return "filterBank"; }
 
@@ -156,8 +152,9 @@ namespace dsp::adapters
         int m_numInputChannels;
         std::vector<FilterDefinition> m_definitions;
 
-        // 2D Matrix of filters: m_filters[channelIndex][bandIndex]
-        std::vector<std::vector<std::unique_ptr<dsp::core::IirFilter<float>>>> m_filters;
+        // Flattened filter array: filters[channelIndex * numBands + bandIndex]
+        // Using flat array instead of 2D vector to avoid nested vector cleanup issues
+        std::vector<std::unique_ptr<dsp::core::IirFilter<float>>> m_filters;
 
         // Optimization: Persistent scratch buffers in planar layout
         // m_planarInput[channel][sample] - de-interleaved input

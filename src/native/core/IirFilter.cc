@@ -71,8 +71,9 @@ namespace dsp
             for (size_t i = 1; i < m_b_coeffs.size(); ++i)
             {
                 // x_state stores x[n-1], x[n-2], ..., x[n-M]
-                // Read backwards: x[n-i] is at position (m_x_index - (i-1)) & m_x_mask
-                size_t idx = (m_x_index - (i - 1)) & m_x_mask;
+                // Read backwards: x[n-i] is at position (m_x_index + m_x_mask + 1 - (i-1)) & m_x_mask
+                // Adding buffer size before subtraction prevents underflow
+                size_t idx = (m_x_index + m_x_mask + 1 - (i - 1)) & m_x_mask;
                 output += m_b_coeffs[i] * m_x_state[idx];
             }
 
@@ -80,8 +81,9 @@ namespace dsp
             for (size_t i = 0; i < m_a_coeffs.size(); ++i)
             {
                 // y_state stores y[n-1], y[n-2], ..., y[n-N]
-                // Read backwards: y[n-(i+1)] is at position (m_y_index - i) & m_y_mask
-                size_t idx = (m_y_index - i) & m_y_mask;
+                // Read backwards: y[n-(i+1)] is at position (m_y_index + m_y_mask + 1 - i) & m_y_mask
+                // Adding buffer size before subtraction prevents underflow
+                size_t idx = (m_y_index + m_y_mask + 1 - i) & m_y_mask;
                 output -= m_a_coeffs[i] * m_y_state[idx];
             }
 
@@ -131,14 +133,14 @@ namespace dsp
                     T y = m_b_coeffs[0] * input[n];
                     for (size_t i = 1; i < m_b_coeffs.size(); ++i)
                     {
-                        size_t idx = (x_idx - (i - 1)) & x_mask;
+                        size_t idx = (x_idx + x_mask + 1 - (i - 1)) & x_mask;
                         y += m_b_coeffs[i] * x_temp[idx];
                     }
 
                     // Feedback
                     for (size_t i = 0; i < m_a_coeffs.size(); ++i)
                     {
-                        size_t idx = (y_idx - i) & y_mask;
+                        size_t idx = (y_idx + y_mask + 1 - i) & y_mask;
                         y -= m_a_coeffs[i] * y_temp[idx];
                     }
 
@@ -162,14 +164,14 @@ namespace dsp
                     T y = m_b_coeffs[0] * input[n];
                     for (size_t i = 1; i < m_b_coeffs.size(); ++i)
                     {
-                        size_t idx = (m_x_index - (i - 1)) & m_x_mask;
+                        size_t idx = (m_x_index + m_x_mask + 1 - (i - 1)) & m_x_mask;
                         y += m_b_coeffs[i] * m_x_state[idx];
                     }
 
                     // Feedback
                     for (size_t i = 0; i < m_a_coeffs.size(); ++i)
                     {
-                        size_t idx = (m_y_index - i) & m_y_mask;
+                        size_t idx = (m_y_index + m_y_mask + 1 - i) & m_y_mask;
                         y -= m_a_coeffs[i] * m_y_state[idx];
                     }
 

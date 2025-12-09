@@ -112,6 +112,57 @@ export interface CumulativeMovingAverageParams {
 }
 
 /**
+ * Parameters for adding a Kalman Filter stage
+ *
+ * Kalman filter for tracking multi-dimensional position/velocity with noise reduction.
+ * Perfect for GPS tracking, sensor fusion, and any interleaved position data.
+ *
+ * Data format: Interleaved positions [x1, y1, x2, y2, ...] or [lat1, lon1, lat2, lon2, ...]
+ * State: [position, velocity] for each dimension
+ *
+ * @property dimensions - Number of spatial dimensions (2 for lat/lon, 3 for x/y/z). Default: 2
+ * @property processNoise - Process noise covariance Q (models motion uncertainty). Default: 1e-5
+ * @property measurementNoise - Measurement noise covariance R (models sensor noise). Default: 1e-2
+ * @property initialError - Initial estimation error covariance P0. Default: 1.0
+ *
+ * @example
+ * // GPS tracking (lat/lon)
+ * pipeline.KalmanFilter({ dimensions: 2, processNoise: 1e-5, measurementNoise: 0.01 });
+ *
+ * @example
+ * // 3D position tracking
+ * pipeline.KalmanFilter({ dimensions: 3, processNoise: 1e-4, measurementNoise: 0.05 });
+ */
+export interface KalmanFilterParams {
+  /**
+   * Number of dimensions (2 for lat/lon, 3 for x/y/z, etc.)
+   * Default: 2
+   */
+  dimensions?: number;
+
+  /**
+   * Process noise covariance Q - models uncertainty in motion model
+   * Higher values = more responsive to changes, less smooth
+   * Default: 1e-5
+   */
+  processNoise?: number;
+
+  /**
+   * Measurement noise covariance R - models sensor noise
+   * Higher values = trust measurements less, smoother output
+   * Default: 1e-2 (1% noise)
+   */
+  measurementNoise?: number;
+
+  /**
+   * Initial estimation error covariance P0
+   * Higher values = less confident in initial state estimate
+   * Default: 1.0
+   */
+  initialError?: number;
+}
+
+/**
  * Parameters for adding a RMS stage
  *
  * Two windowing modes supported:

@@ -7,6 +7,7 @@ import type {
   MovingAverageParams,
   ExponentialMovingAverageParams,
   CumulativeMovingAverageParams,
+  KalmanFilterParams,
   RmsParams,
   RectifyParams,
   VarianceParams,
@@ -1972,6 +1973,103 @@ class DspProcessor {
     }
     this.nativeInstance.addStage("amplify", params);
     this.stages.push(`amplify:${params.gain}`);
+    return this;
+  }
+
+  /**
+   * Apply Kalman filtering for multi-dimensional position/velocity tracking.
+   *
+   * Perfect for GPS tracking, sensor fusion, and any interleaved position data with noise.
+   * Implements discrete Kalman filter with constant velocity motion model.
+   *
+   * Input format: Interleaved positions [x1, y1, x2, y2, ...] or [lat1, lon1, lat2, lon2, ...]
+   * Output: Filtered positions (velocities tracked internally in state)
+   * State: [position, velocity] for each dimension
+   *
+   * The filter predicts future position based on velocity, then updates estimate with measurements.
+   * Noise parameters Q and R control the tradeoff between responsiveness and smoothness.
+   *
+   * @param params - Kalman filter configuration
+   * @param params.dimensions - Number of spatial dimensions (2 for lat/lon, 3 for x/y/z). Default: 2
+   * @param params.processNoise - Process noise Q (motion uncertainty). Lower = smoother. Default: 1e-5
+   * @param params.measurementNoise - Measurement noise R (sensor noise). Higher = smoother. Default: 1e-2
+   * @param params.initialError - Initial error covariance P0. Default: 1.0
+   * @returns this (for method chaining)
+   *
+   * @example
+   * // GPS tracking with 2D lat/lon coordinates
+   * const gpsTracker = createDspPipeline();
+   * gpsTracker.KalmanFilter({
+   *   dimensions: 2,
+   *   processNoise: 1e-5,    // Very smooth motion model
+   *   measurementNoise: 0.01  // 1% GPS noise
+   * });
+   *
+   * // Process interleaved GPS data: [lat1, lon1, lat2, lon2, lat3, lon3, ...]
+   * const rawGps = new Float32Array([
+   *   37.7749, -122.4194,  // San Francisco
+   *   37.7750, -122.4195,
+   *   37.7751, -122.4196
+   * ]);
+   * const filteredGps = gpsTracker.process(rawGps, { numChannels: 2 });
+   *
+   * @example
+   * // 3D position tracking (x, y, z)
+   * const positionTracker = createDspPipeline();
+   * positionTracker.KalmanFilter({
+   *   dimensions: 3,
+   *   processNoise: 1e-4,
+   *   measurementNoise: 0.05
+   * });
+   *
+   * // Process interleaved 3D data: [x1, y1, z1, x2, y2, z2, ...]
+   * const raw3d = new Float32Array([1.0, 2.0, 3.0, 1.1, 2.1, 3.1]);
+   * const filtered3d = positionTracker.process(raw3d, { numChannels: 3 });
+   *
+   * @example
+   * // High-noise GPS scenario (e.g., urban canyon)
+   * const robustGps = createDspPipeline();
+   * robustGps.KalmanFilter({
+   *   dimensions: 2,
+   *   processNoise: 1e-4,    // More dynamic motion
+   *   measurementNoise: 0.1   // 10% GPS noise (trust measurements less)
+   * });
+   */
+  KalmanFilter(params: KalmanFilterParams = {}): this {
+    const dimensions = params.dimensions ?? 2;
+    const processNoise = params.processNoise ?? 1e-5;
+    const measurementNoise = params.measurementNoise ?? 1e-2;
+    const initialError = params.initialError ?? 1.0;
+
+    if (dimensions < 1 || dimensions > 10) {
+      throw new Error(
+        "KalmanFilter: dimensions must be between 1 and 10, got " + dimensions
+      );
+    }
+    if (processNoise <= 0) {
+      throw new Error(
+        "KalmanFilter: processNoise must be positive, got " + processNoise
+      );
+    }
+    if (measurementNoise <= 0) {
+      throw new Error(
+        "KalmanFilter: measurementNoise must be positive, got " +
+          measurementNoise
+      );
+    }
+    if (initialError <= 0) {
+      throw new Error(
+        "KalmanFilter: initialError must be positive, got " + initialError
+      );
+    }
+
+    this.nativeInstance.addStage("kalmanFilter", {
+      dimensions,
+      processNoise,
+      measurementNoise,
+      initialError,
+    });
+    this.stages.push(`kalmanFilter:${dimensions}D`);
     return this;
   }
 

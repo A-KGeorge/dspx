@@ -37,6 +37,7 @@
 #include "adapters/AmplifyStage.h"                  // Amplify (Gain) stage
 #include "adapters/IntegratorStage.h"               // Integrator stage
 #include "adapters/SnrStage.h"                      // SNR stage
+#include "adapters/KalmanFilterStage.h"             // Kalman Filter stage
 
 namespace dsp
 {
@@ -1105,6 +1106,37 @@ namespace dsp
 
         m_stageFactories["filter:fir"] = filterFactory;
         m_stageFactories["filter:iir"] = filterFactory;
+
+        // ===================================================================
+        // Kalman Filter Stage
+        // ===================================================================
+        m_stageFactories["kalmanFilter"] = [](const Napi::Object &params)
+        {
+            int dimensions = 2;
+            float processNoise = 1e-5f;
+            float measurementNoise = 1e-2f;
+            float initialError = 1.0f;
+
+            if (params.Has("dimensions"))
+            {
+                dimensions = params.Get("dimensions").As<Napi::Number>().Int32Value();
+            }
+            if (params.Has("processNoise"))
+            {
+                processNoise = params.Get("processNoise").As<Napi::Number>().FloatValue();
+            }
+            if (params.Has("measurementNoise"))
+            {
+                measurementNoise = params.Get("measurementNoise").As<Napi::Number>().FloatValue();
+            }
+            if (params.Has("initialError"))
+            {
+                initialError = params.Get("initialError").As<Napi::Number>().FloatValue();
+            }
+
+            return std::make_unique<adapters::KalmanFilterStage>(
+                dimensions, processNoise, measurementNoise, initialError);
+        };
     }
 
     /**
