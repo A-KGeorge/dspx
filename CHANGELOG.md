@@ -1,5 +1,11 @@
 # dspx
 
+## 1.3.2
+
+### Patch Changes
+
+- [`fa07e41`](https://github.com/A-KGeorge/dspx/commit/fa07e410d92c73a3655c00f311e7ff4a81395aaa) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - add kalman filter
+
 ## 1.3.1
 
 ### Patch Changes
