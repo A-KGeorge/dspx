@@ -1,5 +1,11 @@
 # dspx
 
+## 1.3.3
+
+### Patch Changes
+
+- [`0a8b112`](https://github.com/A-KGeorge/dspx/commit/0a8b1123c9e8e66f09eb5ce2e6216994b6e07193) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - removed linux x64 build
+
 ## 1.3.2
 
 ### Patch Changes
