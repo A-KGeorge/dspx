@@ -51,6 +51,30 @@ namespace dsp
 #include <cstdlib>
 #include "utils/Toon.h"
 
+// SIMD optimizations for timestamp interpolation
+// Priority: AVX2 (8-wide) > SSE (4-wide) > NEON (4-wide) > Scalar
+#if defined(__AVX2__) || (defined(_MSC_VER) && defined(__AVX2__))
+#include <immintrin.h>
+#define HAS_AVX2 1
+#define HAS_SSE 0
+#define HAS_NEON 0
+#elif defined(__SSE__) || defined(__SSE2__) || (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86)))
+#include <emmintrin.h> // SSE2
+#include <xmmintrin.h> // SSE
+#define HAS_AVX2 0
+#define HAS_SSE 1
+#define HAS_NEON 0
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#define HAS_AVX2 0
+#define HAS_SSE 0
+#define HAS_NEON 1
+#else
+#define HAS_AVX2 0
+#define HAS_SSE 0
+#define HAS_NEON 0
+#endif
+
 namespace dsp
 {
 
@@ -1260,6 +1284,569 @@ namespace dsp
     }
 
     /**
+     * SIMD-optimized timestamp interpolation for resizing stages
+     * Multi-platform support:
+     * - AVX2 (x86_64): 8-wide vectorization
+     * - SSE2 (x86): 4-wide vectorization
+     * - NEON (ARM): 4-wide vectorization
+     * - Scalar fallback for all other platforms
+     *
+     * @param timestamps Source timestamp array (channel-major layout)
+     * @param prevNumSamples Number of samples in source
+     * @param prevChannels Number of channels in source
+     * @param numOutputSamples Number of samples to generate
+     * @param outputChannels Number of channels in output
+     * @param timeScale Time scaling factor from stage
+     * @param output Output timestamp vector
+     */
+    inline void interpolateTimestampsSIMD(
+        const float *timestamps,
+        size_t prevNumSamples,
+        int prevChannels,
+        size_t numOutputSamples,
+        int outputChannels,
+        double timeScale,
+        std::vector<float> &output)
+    {
+#if HAS_AVX2
+        // ========================================
+        // AVX2 Implementation (8-wide)
+        // ========================================
+        // Process 8 output samples at a time with AVX2
+        const size_t simdWidth = 8;
+        const size_t simdIterations = numOutputSamples / simdWidth;
+        const size_t remainder = numOutputSamples % simdWidth;
+
+        // Precompute constants for SIMD
+        const __m256 vTimeScale = _mm256_set1_ps(static_cast<float>(timeScale));
+        const __m256i vPrevChannels = _mm256_set1_epi32(prevChannels);
+        const __m256 vPrevNumSamples = _mm256_set1_ps(static_cast<float>(prevNumSamples));
+        const __m256 vOne = _mm256_set1_ps(1.0f);
+
+        // SIMD loop: Process 8 timestamps at once
+        for (size_t iter = 0; iter < simdIterations; ++iter)
+        {
+            size_t baseIdx = iter * simdWidth;
+
+            // Generate indices: [baseIdx, baseIdx+1, ..., baseIdx+7]
+            __m256 vIdx = _mm256_set_ps(
+                static_cast<float>(baseIdx + 7),
+                static_cast<float>(baseIdx + 6),
+                static_cast<float>(baseIdx + 5),
+                static_cast<float>(baseIdx + 4),
+                static_cast<float>(baseIdx + 3),
+                static_cast<float>(baseIdx + 2),
+                static_cast<float>(baseIdx + 1),
+                static_cast<float>(baseIdx + 0));
+
+            // Calculate input time: i * timeScale
+            __m256 vInputTime = _mm256_mul_ps(vIdx, vTimeScale);
+
+            // Extract integer and fractional parts
+            __m256i vInputIdx = _mm256_cvttps_epi32(vInputTime);
+            __m256 vInputIdxFloat = _mm256_cvtepi32_ps(vInputIdx);
+            __m256 vFrac = _mm256_sub_ps(vInputTime, vInputIdxFloat);
+
+            // Process each of the 8 values (can't easily vectorize the conditional logic)
+            alignas(32) float inputTimes[8];
+            alignas(32) int inputIndices[8];
+            alignas(32) float fracs[8];
+
+            _mm256_store_ps(inputTimes, vInputTime);
+            _mm256_store_si256((__m256i *)inputIndices, vInputIdx);
+            _mm256_store_ps(fracs, vFrac);
+
+            for (size_t j = 0; j < simdWidth; ++j)
+            {
+                size_t i = baseIdx + j;
+                size_t inputIdx = inputIndices[j];
+                float frac = fracs[j];
+                float timestamp;
+
+                if (inputIdx >= prevNumSamples)
+                {
+                    size_t lastIdx = prevNumSamples - 1;
+                    timestamp = timestamps[lastIdx * prevChannels] +
+                                static_cast<float>((inputTimes[j] - lastIdx) * timeScale);
+                }
+                else if (inputIdx + 1 >= prevNumSamples)
+                {
+                    timestamp = timestamps[inputIdx * prevChannels];
+                }
+                else
+                {
+                    float t0 = timestamps[inputIdx * prevChannels];
+                    float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                    timestamp = t0 + frac * (t1 - t0);
+                }
+
+                // Replicate timestamp across all output channels
+                for (int ch = 0; ch < outputChannels; ++ch)
+                {
+                    output[i * outputChannels + ch] = timestamp;
+                }
+            }
+        }
+
+        // Handle remainder samples with scalar code
+        for (size_t i = simdIterations * simdWidth; i < numOutputSamples; ++i)
+        {
+            double inputTime = i * timeScale;
+            size_t inputIdx = static_cast<size_t>(inputTime);
+            double frac = inputTime - inputIdx;
+            float timestamp;
+
+            if (inputIdx >= prevNumSamples)
+            {
+                size_t lastIdx = prevNumSamples - 1;
+                timestamp = timestamps[lastIdx * prevChannels] +
+                            static_cast<float>((inputTime - lastIdx) * timeScale);
+            }
+            else if (inputIdx + 1 >= prevNumSamples)
+            {
+                timestamp = timestamps[inputIdx * prevChannels];
+            }
+            else
+            {
+                float t0 = timestamps[inputIdx * prevChannels];
+                float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
+            }
+
+            for (int ch = 0; ch < outputChannels; ++ch)
+            {
+                output[i * outputChannels + ch] = timestamp;
+            }
+        }
+#elif HAS_SSE
+        // ========================================
+        // SSE2 Implementation (4-wide)
+        // ========================================
+        const size_t simdWidth = 4;
+        const size_t simdIterations = numOutputSamples / simdWidth;
+
+        const __m128 vTimeScale = _mm_set1_ps(static_cast<float>(timeScale));
+        const __m128 vPrevNumSamples = _mm_set1_ps(static_cast<float>(prevNumSamples));
+
+        for (size_t iter = 0; iter < simdIterations; ++iter)
+        {
+            size_t baseIdx = iter * simdWidth;
+
+            // Generate indices [baseIdx, baseIdx+1, baseIdx+2, baseIdx+3]
+            alignas(16) float indices[4] = {
+                static_cast<float>(baseIdx),
+                static_cast<float>(baseIdx + 1),
+                static_cast<float>(baseIdx + 2),
+                static_cast<float>(baseIdx + 3)};
+            __m128 vIndices = _mm_load_ps(indices);
+            __m128 vInputTime = _mm_mul_ps(vIndices, vTimeScale);
+
+            // Convert to int and back to get integer part
+            __m128i vInputIdx = _mm_cvttps_epi32(vInputTime);
+            __m128 vInputIdxFloat = _mm_cvtepi32_ps(vInputIdx);
+            __m128 vFrac = _mm_sub_ps(vInputTime, vInputIdxFloat);
+
+            // Store for scalar processing
+            alignas(16) float inputTimes[4];
+            _mm_store_ps(inputTimes, vInputTime);
+            alignas(16) int inputIndices[4];
+            _mm_store_si128(reinterpret_cast<__m128i *>(inputIndices), vInputIdx);
+            alignas(16) float fractions[4];
+            _mm_store_ps(fractions, vFrac);
+
+            // Process each sample
+            for (size_t j = 0; j < simdWidth; ++j)
+            {
+                size_t i = baseIdx + j;
+                size_t inputIdx = inputIndices[j];
+                double frac = fractions[j];
+                float timestamp;
+
+                if (inputIdx >= prevNumSamples)
+                {
+                    size_t lastIdx = prevNumSamples - 1;
+                    timestamp = timestamps[lastIdx * prevChannels] +
+                                static_cast<float>((inputTimes[j] - lastIdx) * timeScale);
+                }
+                else if (inputIdx + 1 >= prevNumSamples)
+                {
+                    timestamp = timestamps[inputIdx * prevChannels];
+                }
+                else
+                {
+                    float t0 = timestamps[inputIdx * prevChannels];
+                    float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                    timestamp = t0 + frac * (t1 - t0);
+                }
+
+                for (int ch = 0; ch < outputChannels; ++ch)
+                {
+                    output[i * outputChannels + ch] = timestamp;
+                }
+            }
+        }
+
+        // Handle remainder
+        for (size_t i = simdIterations * simdWidth; i < numOutputSamples; ++i)
+        {
+            double inputTime = i * timeScale;
+            size_t inputIdx = static_cast<size_t>(inputTime);
+            double frac = inputTime - inputIdx;
+            float timestamp;
+
+            if (inputIdx >= prevNumSamples)
+            {
+                size_t lastIdx = prevNumSamples - 1;
+                timestamp = timestamps[lastIdx * prevChannels] +
+                            static_cast<float>((inputTime - lastIdx) * timeScale);
+            }
+            else if (inputIdx + 1 >= prevNumSamples)
+            {
+                timestamp = timestamps[inputIdx * prevChannels];
+            }
+            else
+            {
+                float t0 = timestamps[inputIdx * prevChannels];
+                float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
+            }
+
+            for (int ch = 0; ch < outputChannels; ++ch)
+            {
+                output[i * outputChannels + ch] = timestamp;
+            }
+        }
+#elif HAS_NEON
+        // ========================================
+        // ARM NEON Implementation (4-wide)
+        // ========================================
+        const size_t simdWidth = 4;
+        const size_t simdIterations = numOutputSamples / simdWidth;
+
+        const float32x4_t vTimeScale = vdupq_n_f32(static_cast<float>(timeScale));
+        const float32x4_t vPrevNumSamples = vdupq_n_f32(static_cast<float>(prevNumSamples));
+
+        for (size_t iter = 0; iter < simdIterations; ++iter)
+        {
+            size_t baseIdx = iter * simdWidth;
+
+            // Generate indices
+            alignas(16) float indices[4] = {
+                static_cast<float>(baseIdx),
+                static_cast<float>(baseIdx + 1),
+                static_cast<float>(baseIdx + 2),
+                static_cast<float>(baseIdx + 3)};
+            float32x4_t vIndices = vld1q_f32(indices);
+            float32x4_t vInputTime = vmulq_f32(vIndices, vTimeScale);
+
+            // Extract integer and fractional parts
+            int32x4_t vInputIdx = vcvtq_s32_f32(vInputTime);
+            float32x4_t vInputIdxFloat = vcvtq_f32_s32(vInputIdx);
+            float32x4_t vFrac = vsubq_f32(vInputTime, vInputIdxFloat);
+
+            // Store for processing
+            alignas(16) float inputTimes[4];
+            vst1q_f32(inputTimes, vInputTime);
+            alignas(16) int inputIndices[4];
+            vst1q_s32(inputIndices, vInputIdx);
+            alignas(16) float fractions[4];
+            vst1q_f32(fractions, vFrac);
+
+            // Process each sample
+            for (size_t j = 0; j < simdWidth; ++j)
+            {
+                size_t i = baseIdx + j;
+                size_t inputIdx = inputIndices[j];
+                double frac = fractions[j];
+                float timestamp;
+
+                if (inputIdx >= prevNumSamples)
+                {
+                    size_t lastIdx = prevNumSamples - 1;
+                    timestamp = timestamps[lastIdx * prevChannels] +
+                                static_cast<float>((inputTimes[j] - lastIdx) * timeScale);
+                }
+                else if (inputIdx + 1 >= prevNumSamples)
+                {
+                    timestamp = timestamps[inputIdx * prevChannels];
+                }
+                else
+                {
+                    float t0 = timestamps[inputIdx * prevChannels];
+                    float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                    timestamp = t0 + frac * (t1 - t0);
+                }
+
+                for (int ch = 0; ch < outputChannels; ++ch)
+                {
+                    output[i * outputChannels + ch] = timestamp;
+                }
+            }
+        }
+
+        // Handle remainder
+        for (size_t i = simdIterations * simdWidth; i < numOutputSamples; ++i)
+        {
+            double inputTime = i * timeScale;
+            size_t inputIdx = static_cast<size_t>(inputTime);
+            double frac = inputTime - inputIdx;
+            float timestamp;
+
+            if (inputIdx >= prevNumSamples)
+            {
+                size_t lastIdx = prevNumSamples - 1;
+                timestamp = timestamps[lastIdx * prevChannels] +
+                            static_cast<float>((inputTime - lastIdx) * timeScale);
+            }
+            else if (inputIdx + 1 >= prevNumSamples)
+            {
+                timestamp = timestamps[inputIdx * prevChannels];
+            }
+            else
+            {
+                float t0 = timestamps[inputIdx * prevChannels];
+                float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
+            }
+
+            for (int ch = 0; ch < outputChannels; ++ch)
+            {
+                output[i * outputChannels + ch] = timestamp;
+            }
+        }
+#elif HAS_SSE
+        // ========================================
+        // SSE2 Implementation (4-wide)
+        // ========================================
+        const size_t simdWidth = 4;
+        const size_t simdIterations = numOutputSamples / simdWidth;
+
+        const __m128 vTimeScale = _mm_set1_ps(static_cast<float>(timeScale));
+        const __m128 vPrevNumSamples = _mm_set1_ps(static_cast<float>(prevNumSamples));
+
+        for (size_t iter = 0; iter < simdIterations; ++iter)
+        {
+            size_t baseIdx = iter * simdWidth;
+
+            // Generate indices [baseIdx, baseIdx+1, baseIdx+2, baseIdx+3]
+            alignas(16) float indices[4] = {
+                static_cast<float>(baseIdx),
+                static_cast<float>(baseIdx + 1),
+                static_cast<float>(baseIdx + 2),
+                static_cast<float>(baseIdx + 3)};
+            __m128 vIndices = _mm_load_ps(indices);
+            __m128 vInputTime = _mm_mul_ps(vIndices, vTimeScale);
+
+            // Convert to int and back to get integer part
+            __m128i vInputIdx = _mm_cvttps_epi32(vInputTime);
+            __m128 vInputIdxFloat = _mm_cvtepi32_ps(vInputIdx);
+            __m128 vFrac = _mm_sub_ps(vInputTime, vInputIdxFloat);
+
+            // Store for scalar processing
+            alignas(16) float inputTimes[4];
+            _mm_store_ps(inputTimes, vInputTime);
+            alignas(16) int inputIndices[4];
+            _mm_store_si128(reinterpret_cast<__m128i *>(inputIndices), vInputIdx);
+            alignas(16) float fractions[4];
+            _mm_store_ps(fractions, vFrac);
+
+            // Process each sample
+            for (size_t j = 0; j < simdWidth; ++j)
+            {
+                size_t i = baseIdx + j;
+                size_t inputIdx = inputIndices[j];
+                double frac = fractions[j];
+                float timestamp;
+
+                if (inputIdx >= prevNumSamples)
+                {
+                    size_t lastIdx = prevNumSamples - 1;
+                    timestamp = timestamps[lastIdx * prevChannels] +
+                                static_cast<float>((inputTimes[j] - lastIdx) * timeScale);
+                }
+                else if (inputIdx + 1 >= prevNumSamples)
+                {
+                    timestamp = timestamps[inputIdx * prevChannels];
+                }
+                else
+                {
+                    float t0 = timestamps[inputIdx * prevChannels];
+                    float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                    timestamp = t0 + frac * (t1 - t0);
+                }
+
+                for (int ch = 0; ch < outputChannels; ++ch)
+                {
+                    output[i * outputChannels + ch] = timestamp;
+                }
+            }
+        }
+
+        // Handle remainder
+        for (size_t i = simdIterations * simdWidth; i < numOutputSamples; ++i)
+        {
+            double inputTime = i * timeScale;
+            size_t inputIdx = static_cast<size_t>(inputTime);
+            double frac = inputTime - inputIdx;
+            float timestamp;
+
+            if (inputIdx >= prevNumSamples)
+            {
+                size_t lastIdx = prevNumSamples - 1;
+                timestamp = timestamps[lastIdx * prevChannels] +
+                            static_cast<float>((inputTime - lastIdx) * timeScale);
+            }
+            else if (inputIdx + 1 >= prevNumSamples)
+            {
+                timestamp = timestamps[inputIdx * prevChannels];
+            }
+            else
+            {
+                float t0 = timestamps[inputIdx * prevChannels];
+                float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
+            }
+
+            for (int ch = 0; ch < outputChannels; ++ch)
+            {
+                output[i * outputChannels + ch] = timestamp;
+            }
+        }
+#elif HAS_NEON
+        // ========================================
+        // ARM NEON Implementation (4-wide)
+        // ========================================
+        const size_t simdWidth = 4;
+        const size_t simdIterations = numOutputSamples / simdWidth;
+
+        const float32x4_t vTimeScale = vdupq_n_f32(static_cast<float>(timeScale));
+        const float32x4_t vPrevNumSamples = vdupq_n_f32(static_cast<float>(prevNumSamples));
+
+        for (size_t iter = 0; iter < simdIterations; ++iter)
+        {
+            size_t baseIdx = iter * simdWidth;
+
+            // Generate indices
+            alignas(16) float indices[4] = {
+                static_cast<float>(baseIdx),
+                static_cast<float>(baseIdx + 1),
+                static_cast<float>(baseIdx + 2),
+                static_cast<float>(baseIdx + 3)};
+            float32x4_t vIndices = vld1q_f32(indices);
+            float32x4_t vInputTime = vmulq_f32(vIndices, vTimeScale);
+
+            // Extract integer and fractional parts
+            int32x4_t vInputIdx = vcvtq_s32_f32(vInputTime);
+            float32x4_t vInputIdxFloat = vcvtq_f32_s32(vInputIdx);
+            float32x4_t vFrac = vsubq_f32(vInputTime, vInputIdxFloat);
+
+            // Store for processing
+            alignas(16) float inputTimes[4];
+            vst1q_f32(inputTimes, vInputTime);
+            alignas(16) int inputIndices[4];
+            vst1q_s32(inputIndices, vInputIdx);
+            alignas(16) float fractions[4];
+            vst1q_f32(fractions, vFrac);
+
+            // Process each sample
+            for (size_t j = 0; j < simdWidth; ++j)
+            {
+                size_t i = baseIdx + j;
+                size_t inputIdx = inputIndices[j];
+                double frac = fractions[j];
+                float timestamp;
+
+                if (inputIdx >= prevNumSamples)
+                {
+                    size_t lastIdx = prevNumSamples - 1;
+                    timestamp = timestamps[lastIdx * prevChannels] +
+                                static_cast<float>((inputTimes[j] - lastIdx) * timeScale);
+                }
+                else if (inputIdx + 1 >= prevNumSamples)
+                {
+                    timestamp = timestamps[inputIdx * prevChannels];
+                }
+                else
+                {
+                    float t0 = timestamps[inputIdx * prevChannels];
+                    float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                    timestamp = t0 + frac * (t1 - t0);
+                }
+
+                for (int ch = 0; ch < outputChannels; ++ch)
+                {
+                    output[i * outputChannels + ch] = timestamp;
+                }
+            }
+        }
+
+        // Handle remainder
+        for (size_t i = simdIterations * simdWidth; i < numOutputSamples; ++i)
+        {
+            double inputTime = i * timeScale;
+            size_t inputIdx = static_cast<size_t>(inputTime);
+            double frac = inputTime - inputIdx;
+            float timestamp;
+
+            if (inputIdx >= prevNumSamples)
+            {
+                size_t lastIdx = prevNumSamples - 1;
+                timestamp = timestamps[lastIdx * prevChannels] +
+                            static_cast<float>((inputTime - lastIdx) * timeScale);
+            }
+            else if (inputIdx + 1 >= prevNumSamples)
+            {
+                timestamp = timestamps[inputIdx * prevChannels];
+            }
+            else
+            {
+                float t0 = timestamps[inputIdx * prevChannels];
+                float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
+            }
+
+            for (int ch = 0; ch < outputChannels; ++ch)
+            {
+                output[i * outputChannels + ch] = timestamp;
+            }
+        }
+#else
+        // ========================================
+        // Scalar Fallback (universal)
+        // ========================================
+        for (size_t i = 0; i < numOutputSamples; ++i)
+        {
+            double inputTime = i * timeScale;
+            size_t inputIdx = static_cast<size_t>(inputTime);
+            double frac = inputTime - inputIdx;
+            float timestamp;
+
+            if (inputIdx >= prevNumSamples)
+            {
+                size_t lastIdx = prevNumSamples - 1;
+                timestamp = timestamps[lastIdx * prevChannels] +
+                            static_cast<float>((inputTime - lastIdx) * timeScale);
+            }
+            else if (inputIdx + 1 >= prevNumSamples)
+            {
+                timestamp = timestamps[inputIdx * prevChannels];
+            }
+            else
+            {
+                float t0 = timestamps[inputIdx * prevChannels];
+                float t1 = timestamps[(inputIdx + 1) * prevChannels];
+                timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
+            }
+
+            for (int ch = 0; ch < outputChannels; ++ch)
+            {
+                output[i * outputChannels + ch] = timestamp;
+            }
+        }
+#endif
+    }
+
+    /**
      * AsyncWorker for processing DSP pipeline in background thread
      */
     class ProcessWorker : public Napi::AsyncWorker
@@ -1407,41 +1994,21 @@ namespace dsp
                             // Create new timestamp vector
                             auto newTimestamps = std::make_unique<std::vector<float>>(actualOutputSize);
 
-                            for (size_t i = 0; i < numOutputSamples; ++i)
-                            {
-                                double inputTime = i * timeScale;
-                                size_t inputIdx = static_cast<size_t>(inputTime);
-                                double frac = inputTime - inputIdx;
-                                float timestamp;
-
-                                if (inputIdx >= prevNumSamples)
-                                {
-                                    size_t lastIdx = prevNumSamples - 1;
-                                    timestamp = m_timestamps[lastIdx * prevChannels] +
-                                                static_cast<float>((inputTime - lastIdx) * timeScale);
-                                }
-                                else if (inputIdx + 1 >= prevNumSamples)
-                                {
-                                    timestamp = m_timestamps[inputIdx * prevChannels];
-                                }
-                                else
-                                {
-                                    float t0 = m_timestamps[inputIdx * prevChannels];
-                                    float t1 = m_timestamps[(inputIdx + 1) * prevChannels];
-                                    timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
-                                }
-
-                                for (int ch = 0; ch < m_channels; ++ch)
-                                {
-                                    (*newTimestamps)[i * m_channels + ch] = timestamp;
-                                }
-                            }
+                            // Use SIMD-optimized interpolation
+                            interpolateTimestampsSIMD(
+                                m_timestamps,
+                                prevNumSamples,
+                                prevChannels,
+                                numOutputSamples,
+                                m_channels,
+                                timeScale,
+                                *newTimestamps);
 
                             // CRITICAL FIX: Transfer ownership safely
                             allocatedTimestamps = std::move(newTimestamps);
                             m_timestamps = allocatedTimestamps->data();
 
-                            // std::cout << "[DEBUG] Execute - timestamps reinterpolated, new addr="
+                            // std::cout << "[DEBUG] Execute - timestamps reinterpolated (SIMD), new addr="
                             //           << m_timestamps << std::endl;
                         }
                     }
