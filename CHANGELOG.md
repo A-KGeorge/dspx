@@ -1,5 +1,11 @@
 # dspx
 
+## 1.3.4
+
+### Patch Changes
+
+- [`c4073fa`](https://github.com/A-KGeorge/dspx/commit/c4073fa562bdbd3114218c8fb0954fe6e331b367) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Fixed filterbanks
+
 ## 1.3.3
 
 ### Patch Changes
