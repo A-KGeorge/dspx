@@ -84,9 +84,13 @@ namespace dsp
     DspPipeline::DspPipeline(const Napi::CallbackInfo &info)
         : Napi::ObjectWrap<DspPipeline>(info)
     {
+        // std::cout << "[DEBUG] DspPipeline::Constructor - this=" << this
+        //           << ", creating pipeline" << std::endl;
         // Initialize the lock
         m_isBusy = std::make_shared<std::atomic<bool>>(false);
+        // std::cout << "[DEBUG] DspPipeline::Constructor - m_isBusy=" << m_isBusy.get() << std::endl;
         InitializeStageFactories();
+        // std::cout << "[DEBUG] DspPipeline::Constructor - complete, this=" << this << std::endl;
     }
 
     /**
@@ -1146,22 +1150,26 @@ namespace dsp
     Napi::Value DspPipeline::AddStage(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
+        // std::cout << "[DEBUG] DspPipeline::AddStage - this=" << this << std::endl;
 
         // Check if pipeline is disposed
         if (m_disposed)
         {
+            // std::cout << "[DEBUG] AddStage - pipeline disposed, this=" << this << std::endl;
             Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
             return env.Undefined();
         }
 
         if (*m_isBusy)
         {
+            // std::cout << "[DEBUG] AddStage - pipeline busy, this=" << this << std::endl;
             Napi::Error::New(env, "Cannot add stage while processing").ThrowAsJavaScriptException();
             return env.Undefined();
         }
 
         // 1. Get arguments from TypeScript
         std::string stageName = info[0].As<Napi::String>();
+        // std::cout << "[DEBUG] AddStage - stageName=" << stageName << ", this=" << this << std::endl;
         Napi::Object params = info[1].As<Napi::Object>();
 
         // 2. Look up the stage factory in the map
@@ -1202,10 +1210,12 @@ namespace dsp
     Napi::Value DspPipeline::AddFilterStage(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
+        // std::cout << "[DEBUG] DspPipeline::AddFilterStage - this=" << this << std::endl;
 
         // Check if pipeline is disposed
         if (m_disposed)
         {
+            // std::cout << "[DEBUG] AddFilterStage - pipeline disposed, this=" << this << std::endl;
             Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
             return env.Undefined();
         }
@@ -1278,34 +1288,46 @@ namespace dsp
               m_timestampRef(std::move(timestampRef)),
               m_busyLock(busyLock)
         {
+            // std::cout << "[DEBUG] ProcessWorker::ProcessWorker - this=" << this << std::endl;
+            m_stageCount = m_stages.size();
+            m_stageTypes.reserve(m_stageCount);
+            for (const auto &stage : m_stages)
+            {
+                m_stageTypes.push_back(stage->getType());
+            }
         }
 
     protected:
         // This runs on a worker thread (not blocking the event loop)
         void Execute() override
         {
-            // Local storage for generated timestamps (RAII - automatically freed when function exits)
+            // std::cout << "[DEBUG] ProcessWorker::Execute - START, this=" << this
+            //           << ", data=" << m_data << ", numSamples=" << m_numSamples
+            //           << ", channels=" << m_channels << std::endl;
+            // std::cout << "[WORKER-" << std::this_thread::get_id() << "] Execute START (stages="
+            //           << m_stages.size() << ")" << std::endl;
+
+            // CRITICAL FIX: Use a unique_ptr for timestamp ownership
             std::vector<float> generatedTimestamps;
+            std::unique_ptr<std::vector<float>> allocatedTimestamps;
 
             try
             {
-                // 1. Generate Timestamps if missing (Optimization)
+                // 1. Generate Timestamps if missing
                 if (m_timestamps == nullptr)
                 {
-                    generatedTimestamps.resize(m_numSamples);
+                    // std::cout << "[DEBUG] Execute - generating timestamps, sampleRate=" << m_sampleRate << std::endl;
 
-                    // Calculate time step (dt) in milliseconds
-                    // If sampleRate is 0 or invalid, default to 1.0 (treating indices as time)
+                    generatedTimestamps.resize(m_numSamples);
                     double dt = (m_sampleRate > 0.0) ? (1000.0 / m_sampleRate) : 1.0;
 
-                    // Fill timestamps linearly: t[i] = i * dt
                     for (size_t i = 0; i < m_numSamples; ++i)
                     {
                         generatedTimestamps[i] = static_cast<float>(i * dt);
                     }
 
-                    // Point the main processing pointer to our locally generated data
                     m_timestamps = generatedTimestamps.data();
+                    // std::cout << "[DEBUG] Execute - timestamps generated, addr=" << m_timestamps << std::endl;
                 }
 
                 // 2. Process the buffer through all stages
@@ -1315,35 +1337,75 @@ namespace dsp
                 bool usingTempBuffer = false;
 
                 const bool debugStageDumps = std::getenv("DSPX_DEBUG_STAGE_DUMPS") != nullptr;
-                for (const auto &stage : m_stages)
+
+                // std::cout << "[DEBUG] Execute - processing through " << m_stages.size() << " stages" << std::endl;
+                for (size_t stageIdx = 0; stageIdx < m_stages.size(); ++stageIdx)
                 {
+                    const auto &stage = m_stages[stageIdx];
+
+                    // std::cout << "[DEBUG] Execute - stage " << stageIdx << ", type="
+                    //           << stage->getType() << ", addr=" << stage.get()
+                    //           << ", isResizing=" << stage->isResizing() << std::endl;
+
                     if (stage->isResizing())
                     {
-                        // Resizing logic (same as before)
+                        // Calculate output size
                         size_t outputSize = stage->calculateOutputSize(currentSize);
                         float *outputBuffer = new float[outputSize];
+
+                        // std::cout << "[DEBUG] Execute - allocated output buffer, size=" << outputSize
+                        //           << ", addr=" << outputBuffer << std::endl;
+
+                        // CRITICAL: Save the PREVIOUS size before processResizing updates currentSize
+                        size_t prevSize = currentSize;
 
                         size_t actualOutputSize = 0;
                         stage->processResizing(currentBuffer, currentSize,
                                                outputBuffer, actualOutputSize,
                                                m_channels, m_timestamps);
 
-                        if (usingTempBuffer)
-                            delete[] currentBuffer;
+                        // std::cout << "[DEBUG] Execute - stage " << stageIdx << " resized: "
+                        //           << prevSize << " -> " << actualOutputSize // Use prevSize!
+                        //           << ", buffer=" << outputBuffer << std::endl;
+
+                        // Free previous temp buffer if we owned it
+                        if (usingTempBuffer && tempBuffer != nullptr)
+                        {
+                            //  std::cout << "[DEBUG] Execute - freeing previous temp buffer=" << tempBuffer << std::endl;
+                            delete[] tempBuffer;
+                        }
+
+                        // Update buffer tracking
+                        tempBuffer = outputBuffer;
                         currentBuffer = outputBuffer;
                         currentSize = actualOutputSize;
                         usingTempBuffer = true;
 
+                        // Save previous channel count BEFORE updating
+                        int prevChannels = m_channels;
+
+                        // Update channel count if stage changed it
                         int outputChannels = stage->getOutputChannels();
                         if (outputChannels > 0)
+                        {
+                            // std::cout << "[DEBUG] Execute - channels changed: " << m_channels
+                            //           << " -> " << outputChannels << std::endl;
                             m_channels = outputChannels;
+                        }
 
-                        // Re-interpolate timestamps if needed (same as before)
+                        // Re-interpolate timestamps if needed
                         if (m_timestamps != nullptr)
                         {
+                            // std::cout << "[DEBUG] Execute - reinterpolating timestamps" << std::endl;
+
                             double timeScale = stage->getTimeScaleFactor();
                             size_t numOutputSamples = actualOutputSize / m_channels;
-                            float *newTimestamps = new float[actualOutputSize];
+
+                            // CRITICAL FIX: Use prevSize and prevChannels!
+                            size_t prevNumSamples = prevSize / prevChannels;
+
+                            // Create new timestamp vector
+                            auto newTimestamps = std::make_unique<std::vector<float>>(actualOutputSize);
 
                             for (size_t i = 0; i < numOutputSamples; ++i)
                             {
@@ -1352,42 +1414,48 @@ namespace dsp
                                 double frac = inputTime - inputIdx;
                                 float timestamp;
 
-                                if (inputIdx >= (currentSize / m_channels))
+                                if (inputIdx >= prevNumSamples)
                                 {
-                                    size_t lastIdx = (currentSize / m_channels) - 1;
-                                    timestamp = m_timestamps[lastIdx * m_channels] +
+                                    size_t lastIdx = prevNumSamples - 1;
+                                    timestamp = m_timestamps[lastIdx * prevChannels] +
                                                 static_cast<float>((inputTime - lastIdx) * timeScale);
                                 }
-                                else if (inputIdx + 1 >= (currentSize / m_channels))
+                                else if (inputIdx + 1 >= prevNumSamples)
                                 {
-                                    timestamp = m_timestamps[inputIdx * m_channels];
+                                    timestamp = m_timestamps[inputIdx * prevChannels];
                                 }
                                 else
                                 {
-                                    float t0 = m_timestamps[inputIdx * m_channels];
-                                    float t1 = m_timestamps[(inputIdx + 1) * m_channels];
+                                    float t0 = m_timestamps[inputIdx * prevChannels];
+                                    float t1 = m_timestamps[(inputIdx + 1) * prevChannels];
                                     timestamp = t0 + static_cast<float>(frac) * (t1 - t0);
                                 }
 
                                 for (int ch = 0; ch < m_channels; ++ch)
                                 {
-                                    newTimestamps[i * m_channels + ch] = timestamp;
+                                    (*newTimestamps)[i * m_channels + ch] = timestamp;
                                 }
                             }
-                            m_timestamps = newTimestamps;
-                            m_timestampBuffer.reset(newTimestamps);
+
+                            // CRITICAL FIX: Transfer ownership safely
+                            allocatedTimestamps = std::move(newTimestamps);
+                            m_timestamps = allocatedTimestamps->data();
+
+                            // std::cout << "[DEBUG] Execute - timestamps reinterpolated, new addr="
+                            //           << m_timestamps << std::endl;
                         }
                     }
                     else
                     {
                         // In-place processing
+                        // std::cout << "[DEBUG] Execute - stage " << stageIdx << " in-place processing" << std::endl;
                         stage->process(currentBuffer, currentSize, m_channels, m_timestamps);
 
                         if (debugStageDumps)
                         {
                             const char *stype = stage->getType();
                             size_t toShow = std::min<size_t>(8, currentSize);
-                            std::cout << "[DUMP] after '" << stype << "':";
+                            // std::cout << "[DUMP] after '" << stype << "':";
                             for (size_t i = 0; i < toShow; ++i)
                             {
                                 std::cout << (i == 0 ? ' ' : ',') << currentBuffer[i];
@@ -1400,16 +1468,22 @@ namespace dsp
                 m_finalBuffer = currentBuffer;
                 m_finalSize = currentSize;
                 m_ownsBuffer = usingTempBuffer;
+
+                // std::cout << "[DEBUG] Execute - COMPLETE, finalBuffer=" << m_finalBuffer
+                //           << ", finalSize=" << m_finalSize << ", ownsBuffer=" << m_ownsBuffer << std::endl;
             }
             catch (const std::exception &e)
             {
+                // std::cout << "[DEBUG] Execute - EXCEPTION: " << e.what() << ", this=" << this << std::endl;
+                // std::cout << "[WORKER-" << std::this_thread::get_id() << "] EXCEPTION: " << e.what() << std::endl;
                 SetError(e.what());
             }
-        }
+        } // This runs on the main thread after Execute() completes
 
-        // This runs on the main thread after Execute() completes
         void OnOK() override
         {
+            // std::cout << "[DEBUG] ProcessWorker::OnOK - START, this=" << this
+            //   << ", finalBuffer=" << (void *)m_finalBuffer << ", finalSize=" << m_finalSize << std::endl;
             *m_busyLock = false; // unlock the pipeline
 
             Napi::Env env = Env();
@@ -1423,22 +1497,29 @@ namespace dsp
             // Clean up temporary buffer if we allocated one
             if (m_ownsBuffer)
             {
+                // std::cout << "[DEBUG] OnOK - deleting temp buffer=" << (void *)m_finalBuffer << std::endl;
                 delete[] m_finalBuffer;
             }
 
+            // std::cout << "[DEBUG] OnOK - COMPLETE, resolving promise, this=" << this << std::endl;
             // Resolve the promise with the processed buffer
             m_deferred.Resolve(outputArray);
         }
 
         void OnError(const Napi::Error &error) override
         {
+            // std::cout << "[DEBUG] ProcessWorker::OnError - this=" << this
+            //           << ", error=" << error.Message() << std::endl;
             m_deferred.Reject(error.Value());
             *m_busyLock = false; // unlock the pipeline
+            // std::cout << "[DEBUG] OnError - COMPLETE, this=" << this << std::endl;
         }
 
     private:
         Napi::Promise::Deferred m_deferred;
         std::vector<std::unique_ptr<IDspStage>> &m_stages;
+        size_t m_stageCount;
+        std::vector<std::string> m_stageTypes;
         float *m_data;
         float *m_timestamps;
         double m_sampleRate;
@@ -1469,16 +1550,19 @@ namespace dsp
     Napi::Value DspPipeline::ProcessAsync(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
+        // std::cout << "[DEBUG] DspPipeline::ProcessAsync - this=" << this << std::endl;
 
         // Check if pipeline is disposed
         if (m_disposed)
         {
+            // std::cout << "[DEBUG] ProcessAsync - pipeline disposed, this=" << this << std::endl;
             Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
             return env.Undefined();
         }
 
         if (*m_isBusy)
         {
+            // std::cout << "[DEBUG] ProcessAsync - pipeline busy, this=" << this << std::endl;
             Napi::Error::New(env, "Pipeline is busy: Cannot call process() while another operation is running.").ThrowAsJavaScriptException();
             return env.Undefined();
         }
@@ -1547,8 +1631,13 @@ namespace dsp
         }
 
         *m_isBusy = true; // lock the pipeline
+        // std::cout << "[DEBUG] ProcessAsync - creating worker, data=" << (void *)data
+        //           << ", numSamples=" << numSamples << ", channels=" << channels
+        //           << ", this=" << this << std::endl;
 
         ProcessWorker *worker = new ProcessWorker(env, std::move(deferred), m_stages, data, timestamps, sampleRate, numSamples, channels, std::move(bufferRef), std::move(timestampRef), m_isBusy);
+        // std::cout << "[DEBUG] ProcessAsync - queuing worker=" << (void *)worker
+        //           << ", this=" << this << std::endl;
         worker->Queue();
 
         return promise;
@@ -1566,16 +1655,19 @@ namespace dsp
     Napi::Value DspPipeline::ProcessSync(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
+        // std::cout << "[DEBUG] DspPipeline::ProcessSync - this=" << this << std::endl;
 
         // Check if pipeline is disposed
         if (m_disposed)
         {
+            // std::cout << "[DEBUG] ProcessSync - pipeline disposed, this=" << this << std::endl;
             Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
             return env.Undefined();
         }
 
         if (*m_isBusy)
         {
+            // std::cout << "[DEBUG] ProcessSync - pipeline busy, this=" << this << std::endl;
             Napi::Error::New(env, "Pipeline is busy: Cannot call processSync() while an async operation is running.").ThrowAsJavaScriptException();
             return env.Undefined();
         }
@@ -1702,10 +1794,13 @@ namespace dsp
     Napi::Value DspPipeline::SaveState(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
+        // std::cout << "[DEBUG] DspPipeline::SaveState - this=" << this
+        //           << ", stages=" << m_stages.size() << std::endl;
 
         // Check if pipeline is disposed
         if (m_disposed)
         {
+            // std::cout << "[DEBUG] SaveState - pipeline disposed, this=" << this << std::endl;
             Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
             return env.Undefined();
         }
@@ -1799,10 +1894,12 @@ namespace dsp
     Napi::Value DspPipeline::LoadState(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
-
+        // std::cout << "[DEBUG] DspPipeline::LoadState - this=" << this
+        //           << ", current stages=" << m_stages.size() << std::endl;
         // Check if pipeline is disposed
         if (m_disposed)
         {
+            // std::cout << "[DEBUG] LoadState - pipeline disposed, this=" << this << std::endl;
             Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
             return env.Undefined();
         }
@@ -2046,21 +2143,27 @@ namespace dsp
     Napi::Value DspPipeline::ClearState(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
+        // std::cout << "[DEBUG] DspPipeline::ClearState - this=" << this
+        //   << ", stages=" << m_stages.size() << std::endl;
 
         // Check if pipeline is disposed
         if (m_disposed)
         {
+            // std::cout << "[DEBUG] ClearState - pipeline disposed, this=" << this << std::endl;
             Napi::Error::New(env, "Pipeline is disposed").ThrowAsJavaScriptException();
             return env.Undefined();
         }
 
         // Reset all stages
-        for (auto &stage : m_stages)
+        for (size_t i = 0; i < m_stages.size(); ++i)
         {
-            stage->reset();
+            // std::cout << "[DEBUG] ClearState - resetting stage " << i
+            //           << ", addr=" << m_stages[i].get() << std::endl;
+            m_stages[i]->reset();
         }
 
-        std::cout << "Pipeline state cleared (" << m_stages.size() << " stages reset)" << std::endl;
+        // std::cout << "[DEBUG] Pipeline state cleared (" << m_stages.size()
+        //           << " stages reset), this=" << this << std::endl;
 
         return env.Undefined();
     }
@@ -2156,21 +2259,27 @@ namespace dsp
     Napi::Value DspPipeline::Dispose(const Napi::CallbackInfo &info)
     {
         Napi::Env env = info.Env();
+        // std::cout << "[DEBUG] DspPipeline::Dispose - this=" << this
+        //           << ", stages=" << m_stages.size() << ", disposed=" << m_disposed << std::endl;
 
         // Already disposed - silently succeed (idempotent behavior)
         if (m_disposed)
         {
+            // std::cout << "[DEBUG] Dispose - already disposed, this=" << this << std::endl;
             return env.Undefined();
         }
 
         // Cannot dispose while processing is in progress
         if (*m_isBusy)
         {
+            // std::cout << "[DEBUG] Dispose - pipeline busy, cannot dispose, this=" << this << std::endl;
             Napi::Error::New(env, "Cannot dispose pipeline: process() is still running.")
                 .ThrowAsJavaScriptException();
             return env.Undefined();
         }
 
+        // std::cout << "[DEBUG] Dispose - clearing " << m_stages.size()
+        //           << " stages, this=" << this << std::endl;
         // Clear all stages - triggers RAII cleanup of all stage resources
         // This will:
         // - Free all stage internal buffers
@@ -2179,12 +2288,14 @@ namespace dsp
         // - Free all detachable buffers
         // - Free timestamp and resize buffers
         m_stages.clear();
+        // std::cout << "[DEBUG] Dispose - stages cleared, this=" << this << std::endl;
 
         // Reset busy flag (defensive programming)
         *m_isBusy = false;
 
         // Mark as disposed to prevent further operations
         m_disposed = true;
+        // std::cout << "[DEBUG] Dispose - complete, this=" << this << std::endl;
 
         return env.Undefined();
     }

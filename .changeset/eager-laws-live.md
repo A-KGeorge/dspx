@@ -1,0 +1,5 @@
+---
+"dspx": patch
+---
+
+Fixed filterbanks

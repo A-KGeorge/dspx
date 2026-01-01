@@ -116,10 +116,36 @@ describe("Filter Bank Stage", () => {
       assert.equal(output.length, 600);
     });
 
-    // NOTE: Test "should handle different filter bank scales" removed due to Node.js test runner
-    // N-API cleanup timing issues. The test creates 4 processors in rapid succession which triggers
-    // non-deterministic crashes in the test runner (EXIT CODE 0xC0000005 - ACCESS_VIOLATION).
-    // Individual scale tests work fine - see test-minimal-filterbank.js for validation.
+    test("should handle different filter bank scales", async () => {
+      const scales = ["mel", "bark", "linear", "log"] as const;
+      const createMethods = {
+        mel: FilterBankDesign.createMel.bind(FilterBankDesign),
+        bark: FilterBankDesign.createBark.bind(FilterBankDesign),
+        linear: FilterBankDesign.createLinear.bind(FilterBankDesign),
+        log: FilterBankDesign.createLog.bind(FilterBankDesign),
+      } as const;
+
+      for (const scale of scales) {
+        const proc = createDspPipeline();
+        const filterBank = createMethods[scale](4, 16000, [100, 4000]);
+
+        proc.FilterBank({
+          definitions: filterBank,
+          inputChannels: 1,
+        });
+
+        const signal = new Float32Array(500);
+        for (let i = 0; i < signal.length; i++) {
+          signal[i] = Math.sin((2 * Math.PI * 1000 * i) / 16000);
+        }
+
+        const output = await proc.process(signal, DEFAULT_OPTIONS);
+        assert.equal(output.length, signal.length * 4);
+
+        proc.dispose();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    });
   });
 
   describe("Frequency Decomposition", () => {
@@ -152,10 +178,48 @@ describe("Filter Bank Stage", () => {
       assert.ok(band0Energy > band1Energy * 2);
     });
 
-    // NOTE: Test "should separate multi-frequency signals" removed due to Node.js test runner
-    // N-API cleanup timing issues. The test creates 4 processors in rapid succession which triggers
-    // non-deterministic crashes in the test runner (not in the C++ code itself).
-    // Individual scale tests work fine - see test-minimal-filterbank.js for validation.
+    test("should separate multi-frequency signals", async () => {
+      // Create 4-band filter bank
+      const filterBank = FilterBankDesign.createMel(4, 16000, [100, 4000]);
+
+      processor.FilterBank({
+        definitions: filterBank,
+        inputChannels: 1,
+      });
+
+      // Signal with 200 Hz + 800 Hz + 1500 Hz + 3000 Hz
+      const signal = new Float32Array(2000);
+      for (let i = 0; i < signal.length; i++) {
+        signal[i] =
+          Math.sin((2 * Math.PI * 200 * i) / 16000) +
+          Math.sin((2 * Math.PI * 800 * i) / 16000) +
+          Math.sin((2 * Math.PI * 1500 * i) / 16000) +
+          Math.sin((2 * Math.PI * 3000 * i) / 16000);
+      }
+
+      const output = await processor.process(signal, DEFAULT_OPTIONS);
+
+      // Calculate energy per band
+      const bandEnergies = [0, 0, 0, 0];
+      for (let i = 0; i < 2000; i++) {
+        for (let band = 0; band < 4; band++) {
+          bandEnergies[band] += output[i * 4 + band] ** 2;
+        }
+      }
+
+      // All bands should have captured some energy
+      for (let band = 0; band < 4; band++) {
+        assert.ok(bandEnergies[band] > 0, `Band ${band} should have energy`);
+      }
+
+      // Energy should be relatively distributed (no single band dominates)
+      const totalEnergy = bandEnergies.reduce((a, b) => a + b, 0);
+      const maxBandEnergy = Math.max(...bandEnergies);
+      assert.ok(
+        maxBandEnergy < totalEnergy * 0.6,
+        "Energy should be distributed across bands"
+      );
+    });
   });
 
   describe("Multi-Channel Processing", () => {
@@ -445,10 +509,29 @@ describe("Filter Bank Stage", () => {
       assert.equal(output.length, signal.length);
     });
 
-    // NOTE: Test "should handle large number of bands" removed due to Node.js test runner
-    // N-API cleanup timing issues. Large filter banks (20+ bands) can trigger non-deterministic
-    // crashes when combined with accumulated test suite memory pressure.
-    // The C++ code handles large bands correctly - see test-filterbank-simple.cpp (40 bands tested).
+    test("should handle large number of bands", async () => {
+      const filterBank = FilterBankDesign.createMel(32, 16000, [100, 8000]);
+
+      processor.FilterBank({
+        definitions: filterBank,
+        inputChannels: 1,
+      });
+
+      const signal = new Float32Array(1000);
+      for (let i = 0; i < signal.length; i++) {
+        signal[i] = Math.sin((2 * Math.PI * 1000 * i) / 16000);
+      }
+
+      const output = await processor.process(signal, DEFAULT_OPTIONS);
+
+      // 32 bands × 1 channel = 32 output channels
+      assert.equal(output.length, signal.length * 32);
+
+      // Check that output is finite
+      for (let i = 0; i < output.length; i++) {
+        assert.ok(Number.isFinite(output[i]));
+      }
+    });
 
     test("should handle very short signals", async () => {
       const filterBank = FilterBankDesign.createMel(4, 16000, [100, 4000]);
@@ -486,14 +569,149 @@ describe("Filter Bank Stage", () => {
     });
   });
 
-  // NOTE: "Performance" test suite removed due to Node.js test runner N-API cleanup timing issues.
-  // The test processes large signals (8000 samples × 2 channels × 16 bands = 32 filters total)
-  // which can trigger non-deterministic crashes in the test runner after accumulated test execution.
-  // Performance is validated in production use and test-filterbank-simple.cpp (10K samples × 40 bands).
+  describe("Performance", () => {
+    test("should handle large signals efficiently", async () => {
+      const filterBank = FilterBankDesign.createMel(16, 16000, [100, 8000]);
 
-  // NOTE: "Integration with FilterBankDesign" test suite removed due to Node.js test runner
-  // N-API cleanup timing issues. Tests that create multiple processors in loops (even with delays)
-  // trigger non-deterministic crashes after accumulated test suite execution. The FilterBankDesign
-  // integration is validated through Basic Functionality tests and standalone test files.
-  // See test-minimal-filterbank.js and test-filterbank-simple.cpp for validation.
+      processor.FilterBank({
+        definitions: filterBank,
+        inputChannels: 2,
+      });
+
+      // Large stereo signal: 8000 samples per channel
+      const signal = new Float32Array(16000);
+      for (let i = 0; i < 8000; i++) {
+        signal[i * 2 + 0] = Math.sin((2 * Math.PI * 1000 * i) / 16000);
+        signal[i * 2 + 1] = Math.sin((2 * Math.PI * 2000 * i) / 16000);
+      }
+
+      const startTime = Date.now();
+      const output = await processor.process(signal, {
+        sampleRate: 16000,
+        channels: 2,
+      });
+      const elapsedTime = Date.now() - startTime;
+
+      // Should complete in reasonable time (< 1 second)
+      assert.ok(elapsedTime < 1000, `Processing took ${elapsedTime}ms`);
+
+      // Output: 2 channels × 16 bands × 8000 samples = 256000 samples
+      assert.equal(output.length, 8000 * 2 * 16);
+    });
+
+    test("should process multiple batches efficiently", async () => {
+      const filterBank = FilterBankDesign.createMel(8, 16000, [100, 4000]);
+
+      processor.FilterBank({
+        definitions: filterBank,
+        inputChannels: 1,
+      });
+
+      const batchSize = 1000;
+      const numBatches = 10;
+
+      for (let batch = 0; batch < numBatches; batch++) {
+        const signal = new Float32Array(batchSize);
+        for (let i = 0; i < batchSize; i++) {
+          const t = batch * batchSize + i;
+          signal[i] = Math.sin((2 * Math.PI * 1000 * t) / 16000);
+        }
+
+        const output = await processor.process(signal, DEFAULT_OPTIONS);
+        assert.equal(output.length, batchSize * 8);
+      }
+    });
+  });
+
+  describe("Integration with FilterBankDesign", () => {
+    test("should work with all scale types from FilterBankDesign", async () => {
+      const scales = ["mel", "bark", "linear", "log"] as const;
+      const createMethods = {
+        mel: FilterBankDesign.createMel.bind(FilterBankDesign),
+        bark: FilterBankDesign.createBark.bind(FilterBankDesign),
+        linear: FilterBankDesign.createLinear.bind(FilterBankDesign),
+        log: FilterBankDesign.createLog.bind(FilterBankDesign),
+      } as const;
+
+      for (const scale of scales) {
+        const proc = createDspPipeline();
+        const filterBank = createMethods[scale](8, 16000, [100, 4000]);
+
+        proc.FilterBank({
+          definitions: filterBank,
+          inputChannels: 1,
+        });
+
+        const signal = new Float32Array(500);
+        for (let i = 0; i < signal.length; i++) {
+          signal[i] = Math.sin((2 * Math.PI * 1000 * i) / 16000);
+        }
+
+        const output = await proc.process(signal, DEFAULT_OPTIONS);
+        assert.equal(output.length, signal.length * 8);
+
+        proc.dispose();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    });
+
+    test("should handle different band counts", async () => {
+      const bandCounts = [2, 4, 8, 16, 24];
+
+      for (const numBands of bandCounts) {
+        const proc = createDspPipeline();
+        const filterBank = FilterBankDesign.createMel(
+          numBands,
+          16000,
+          [100, 4000]
+        );
+
+        proc.FilterBank({
+          definitions: filterBank,
+          inputChannels: 1,
+        });
+
+        const signal = new Float32Array(500);
+        for (let i = 0; i < signal.length; i++) {
+          signal[i] = Math.sin((2 * Math.PI * 1000 * i) / 16000);
+        }
+
+        const output = await proc.process(signal, DEFAULT_OPTIONS);
+        assert.equal(output.length, signal.length * numBands);
+
+        proc.dispose();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    });
+
+    test("should handle different frequency ranges", async () => {
+      const ranges: Array<[number, number]> = [
+        [100, 8000],
+        [200, 4000],
+        [500, 2000],
+        [50, 7000],
+      ];
+
+      for (const [fMin, fMax] of ranges) {
+        const proc = createDspPipeline();
+        const filterBank = FilterBankDesign.createMel(8, 16000, [fMin, fMax]);
+
+        proc.FilterBank({
+          definitions: filterBank,
+          inputChannels: 1,
+        });
+
+        const signal = new Float32Array(500);
+        for (let i = 0; i < signal.length; i++) {
+          signal[i] = Math.sin((2 * Math.PI * 1000 * i) / 16000);
+        }
+
+        const output = await proc.process(signal, DEFAULT_OPTIONS);
+        assert.equal(output.length, signal.length * 8);
+
+        proc.dispose();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    });
+  });
 });
