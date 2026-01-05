@@ -1,5 +1,11 @@
 # dspx
 
+## 1.3.5
+
+### Patch Changes
+
+- [`65844a5`](https://github.com/A-KGeorge/dspx/commit/65844a59d23373ec472ce1e51e514013a9e29459) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Added SIMD timestamp interpolation
+
 ## 1.3.4
 
 ### Patch Changes
