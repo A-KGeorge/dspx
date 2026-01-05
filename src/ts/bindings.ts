@@ -3534,7 +3534,7 @@ class DspProcessor {
    * @returns Promise that resolves to the processed Float32Array (same reference as input)
    */
   async process(
-    input: Float32Array,
+    input: Float32Array | Float32Array[],
     timestampsOrOptions: Float32Array | ProcessOptions,
     optionsIfTimestamps?: ProcessOptions
   ): Promise<Float32Array> {
@@ -3716,7 +3716,7 @@ class DspProcessor {
    * const output = await pipeline.processCopy(samples, timestamps, { channels: 1 });
    */
   async processCopy(
-    input: Float32Array,
+    input: Float32Array | Float32Array[],
     timestampsOrOptions: Float32Array | ProcessOptions,
     optionsIfTimestamps?: ProcessOptions
   ): Promise<Float32Array> {
@@ -3748,7 +3748,7 @@ class DspProcessor {
    * @param optionsIfTimestamps - Options object if timestamps provided
    */
   processSync(
-    input: Float32Array,
+    input: Float32Array | Float32Array[],
     timestampsOrOptions: Float32Array | ProcessOptions,
     optionsIfTimestamps?: ProcessOptions
   ): Float32Array {
@@ -3934,7 +3934,7 @@ class DspProcessor {
    * const output = await pipeline.processSyncCopy(samples, timestamps, { channels: 1 });
    */
   processSyncCopy(
-    input: Float32Array,
+    input: Float32Array | Float32Array[],
     timestampsOrOptions: Float32Array | ProcessOptions,
     optionsIfTimestamps?: ProcessOptions
   ): Float32Array {
