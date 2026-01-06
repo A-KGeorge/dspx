@@ -1,5 +1,11 @@
 # dspx
 
+## 1.3.6
+
+### Patch Changes
+
+- [`926117e`](https://github.com/A-KGeorge/dspx/commit/926117ecd6f357d24a345801612f86a64d6e96c6) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Corrected Typescript types to accept Float32Array for process methods
+
 ## 1.3.5
 
 ### Patch Changes
