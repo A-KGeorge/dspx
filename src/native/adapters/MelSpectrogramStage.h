@@ -202,6 +202,39 @@ namespace dsp::adapters
             // Stateless - no reset needed
         }
 
+        void serializeToon(toon::Serializer &serializer) const override
+        {
+            serializer.writeInt32(static_cast<int32_t>(m_numBins));
+            serializer.writeInt32(static_cast<int32_t>(m_numMelBands));
+
+            // Serialize filterbank matrix (row-major)
+            for (size_t i = 0; i < m_numMelBands; ++i)
+            {
+                for (size_t j = 0; j < m_numBins; ++j)
+                {
+                    serializer.writeFloat(m_filterbank(i, j));
+                }
+            }
+        }
+
+        void deserializeToon(toon::Deserializer &deserializer) override
+        {
+            size_t numBins = static_cast<size_t>(deserializer.readInt32());
+            size_t numMelBands = static_cast<size_t>(deserializer.readInt32());
+            {
+                throw std::runtime_error("MelSpectrogram: Dimension mismatch during TOON deserialization");
+            }
+
+            // Restore filterbank matrix
+            for (size_t i = 0; i < m_numMelBands; ++i)
+            {
+                for (size_t j = 0; j < m_numBins; ++j)
+                {
+                    m_filterbank(i, j) = deserializer.readFloat();
+                }
+            }
+        }
+
     private:
         size_t m_numBins;             // Number of input frequency bins
         size_t m_numMelBands;         // Number of output Mel bands

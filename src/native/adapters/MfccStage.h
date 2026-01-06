@@ -202,6 +202,28 @@ namespace dsp::adapters
             // Stateless - no reset needed
         }
 
+        void serializeToon(toon::Serializer &serializer) const override
+        {
+            serializer.writeInt32(static_cast<int32_t>(m_numMelBands));
+            serializer.writeInt32(static_cast<int32_t>(m_numCoefficients));
+            serializer.writeBool(m_useLogEnergy);
+            serializer.writeFloat(m_lifterCoefficient);
+        }
+
+        void deserializeToon(toon::Deserializer &deserializer) override
+        {
+            size_t numMelBands = static_cast<size_t>(deserializer.readInt32());
+            size_t numCoefficients = static_cast<size_t>(deserializer.readInt32());
+
+            if (numMelBands != m_numMelBands || numCoefficients != m_numCoefficients)
+            {
+                throw std::runtime_error("MFCC: Dimension mismatch during TOON deserialization");
+            }
+
+            deserializer.readBool();  // useLogEnergy
+            deserializer.readFloat(); // lifterCoefficient
+        }
+
     private:
         size_t m_numMelBands;      // Number of input Mel bands
         size_t m_numCoefficients;  // Number of MFCC coefficients to output

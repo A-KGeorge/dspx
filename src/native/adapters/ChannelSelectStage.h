@@ -177,6 +177,37 @@ namespace dsp
                 // No state to reset
             }
 
+            void serializeToon(toon::Serializer &serializer) const override
+            {
+                serializer.writeInt32(m_numInputChannels);
+                serializer.writeInt32(static_cast<int>(m_channels.size()));
+                for (int ch : m_channels)
+                {
+                    serializer.writeInt32(ch);
+                }
+            }
+
+            void deserializeToon(toon::Deserializer &deserializer) override
+            {
+                int numInputChannels = deserializer.readInt32();
+                int numChannels = deserializer.readInt32();
+
+                if (numInputChannels != m_numInputChannels || numChannels != static_cast<int>(m_channels.size()))
+                {
+                    throw std::runtime_error("ChannelSelect: Configuration mismatch during TOON deserialization");
+                }
+
+                // Verify channel indices match
+                for (int i = 0; i < numChannels; ++i)
+                {
+                    int ch = deserializer.readInt32();
+                    if (ch != m_channels[i])
+                    {
+                        throw std::runtime_error("ChannelSelect: Channel index mismatch during TOON deserialization");
+                    }
+                }
+            }
+
             int getNumInputChannels() const { return m_numInputChannels; }
             const std::vector<int> &getChannels() const { return m_channels; }
 

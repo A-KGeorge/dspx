@@ -106,22 +106,14 @@ namespace dsp
          *
          * @param serializer The TOON serializer to write binary data to.
          */
-        virtual void serializeToon(toon::Serializer &serializer) const
-        {
-            // Fallback: throw if not implemented for a specific stage
-            throw std::runtime_error("TOON serialization not implemented for this stage type");
-        }
+        virtual void serializeToon(toon::Serializer &serializer) const = 0;
 
         /**
          * @brief Deserializes internal state from TOON binary format.
          *
          * @param deserializer The TOON deserializer to read binary data from.
          */
-        virtual void deserializeToon(toon::Deserializer &deserializer)
-        {
-            throw std::runtime_error("TOON deserialization not implemented for this stage type");
-        }
-
+        virtual void deserializeToon(toon::Deserializer &deserializer) = 0;
         /**
          * @brief Resets the stage's internal state to initial values.
          */

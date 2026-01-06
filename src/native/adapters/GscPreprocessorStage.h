@@ -259,6 +259,50 @@ namespace dsp
                 // No internal state to clear (matrices are fixed)
             }
 
+            void serializeToon(toon::Serializer &serializer) const override
+            {
+                serializer.writeInt32(m_numChannels);
+
+                // Serialize steering weights
+                for (int i = 0; i < m_numChannels; ++i)
+                {
+                    serializer.writeFloat(m_steering_weights(i));
+                }
+
+                // Serialize blocking matrix (column-major)
+                const float *matrixData = m_blocking_matrix.data();
+                size_t totalElements = m_numChannels * (m_numChannels - 1);
+                for (size_t i = 0; i < totalElements; ++i)
+                {
+                    serializer.writeFloat(matrixData[i]);
+                }
+            }
+
+            void deserializeToon(toon::Deserializer &deserializer) override
+            {
+                int numChannels = deserializer.readInt32();
+
+                if (numChannels != m_numChannels)
+                {
+                    throw std::runtime_error("GscPreprocessor: Channel count mismatch during TOON deserialization");
+                }
+
+                // Restore steering weights
+                for (int i = 0; i < m_numChannels; ++i)
+                {
+                    m_steering_weights(i) = deserializer.readFloat();
+                }
+
+                // Restore blocking matrix
+                std::vector<float> matrixData(m_numChannels * (m_numChannels - 1));
+                for (size_t i = 0; i < matrixData.size(); ++i)
+                {
+                    matrixData[i] = deserializer.readFloat();
+                }
+                m_blocking_matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>>(
+                    matrixData.data(), m_numChannels, m_numChannels - 1);
+            }
+
             /**
              * @brief Get number of input channels.
              */

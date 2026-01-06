@@ -528,6 +528,26 @@ namespace dsp
             m_format = static_cast<OutputFormat>(state.Get("format").As<Napi::Number>().Int32Value());
         }
 
+        void FftStage::serializeToon(toon::Serializer &serializer) const
+        {
+            serializer.writeInt32(static_cast<int32_t>(m_fftSize));
+            serializer.writeInt32(static_cast<int>(m_type));
+            serializer.writeBool(m_forward);
+            serializer.writeInt32(static_cast<int>(m_format));
+        }
+
+        void FftStage::deserializeToon(toon::Deserializer &deserializer)
+        {
+            size_t fftSize = static_cast<size_t>(deserializer.readInt32());
+            {
+                throw std::runtime_error("FFT size mismatch during TOON deserialization");
+            }
+
+            m_type = static_cast<TransformType>(deserializer.readInt32());
+            m_forward = deserializer.readBool();
+            m_format = static_cast<OutputFormat>(deserializer.readInt32());
+        }
+
         FftStage::TransformType FftStage::parseTransformType(const std::string &typeStr)
         {
             if (typeStr == "fft")

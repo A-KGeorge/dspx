@@ -94,6 +94,22 @@ namespace dsp::adapters
             // Stateless - nothing to reset
         }
 
+        void serializeToon(toon::Serializer &serializer) const override
+        {
+            serializer.writeString(m_wavelet_name);
+            serializer.writeInt32(static_cast<int32_t>(m_filter_length));
+        }
+
+        void deserializeToon(toon::Deserializer &deserializer) override
+        {
+            std::string loaded_name = deserializer.readString();
+            if (loaded_name != m_wavelet_name)
+            {
+                throw std::runtime_error("Wavelet name mismatch during TOON deserialization");
+            }
+            deserializer.readInt32(); // filter_length (just validate it matches)
+        }
+
     private:
         /**
          * Apply symmetric padding (reflect about edge)

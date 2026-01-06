@@ -77,6 +77,8 @@ namespace dsp
             // State serialization
             Napi::Object serializeState(Napi::Env env) const override;
             void deserializeState(const Napi::Object &state) override;
+            void serializeToon(toon::Serializer &serializer) const override;
+            void deserializeToon(toon::Deserializer &deserializer) override;
 
             // Helper to parse transform type from string
             static TransformType parseTransformType(const std::string &typeStr);

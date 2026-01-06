@@ -238,6 +238,54 @@ namespace dsp
                 // No internal state to clear (matrix and mean are fixed)
             }
 
+            void serializeToon(toon::Serializer &serializer) const override
+            {
+                serializer.writeString(m_transformType);
+                serializer.writeInt32(m_numChannels);
+                serializer.writeInt32(m_numComponents);
+
+                // Serialize mean vector
+                for (int i = 0; i < m_numChannels; ++i)
+                {
+                    serializer.writeFloat(m_mean(i));
+                }
+
+                // Serialize transformation matrix (column-major)
+                const float *matrixData = m_matrix.data();
+                size_t totalElements = m_numChannels * m_numComponents;
+                for (size_t i = 0; i < totalElements; ++i)
+                {
+                    serializer.writeFloat(matrixData[i]);
+                }
+            }
+
+            void deserializeToon(toon::Deserializer &deserializer) override
+            {
+                std::string transformType = deserializer.readString();
+                int numChannels = deserializer.readInt32();
+                int numComponents = deserializer.readInt32();
+
+                if (numChannels != m_numChannels || numComponents != m_numComponents)
+                {
+                    throw std::runtime_error("MatrixTransform: Dimension mismatch during TOON deserialization");
+                }
+
+                // Restore mean vector
+                for (int i = 0; i < m_numChannels; ++i)
+                {
+                    m_mean(i) = deserializer.readFloat();
+                }
+
+                // Restore transformation matrix
+                std::vector<float> matrixData(m_numChannels * m_numComponents);
+                for (size_t i = 0; i < matrixData.size(); ++i)
+                {
+                    matrixData[i] = deserializer.readFloat();
+                }
+                m_matrix = Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::ColMajor>>(
+                    matrixData.data(), m_numChannels, m_numComponents);
+            }
+
             /**
              * @brief Get number of input channels.
              */
