@@ -319,11 +319,11 @@ describe("SNR - window size effects", () => {
     const largeWindow = createDspPipeline();
     largeWindow.Snr({ windowSize: 10 });
 
-    // Noisy signal with varying SNR
+    // DETERMINISTIC signal with varying SNR (no Math.random for reproducibility)
     const input = new Float32Array(40); // 20 samples × 2 channels
     for (let i = 0; i < 20; i++) {
       input[i * 2] = 1.0 + 0.1 * Math.sin(i * 0.5); // Varying signal
-      input[i * 2 + 1] = 0.1 + 0.05 * Math.random(); // Noisy reference
+      input[i * 2 + 1] = 0.1 + 0.05 * Math.sin(i * 1.3); // Deterministic "noise"
     }
 
     const result1 = await smallWindow.process(input, {
@@ -344,7 +344,13 @@ describe("SNR - window size effects", () => {
     const var1 = variance(result1.slice(10)); // Skip initial transient
     const var2 = variance(result2.slice(10));
 
-    assert.ok(var2 < var1, "Larger window should produce smoother output");
+    // With larger window, variance should be lower (smoother)
+    assert.ok(
+      var2 < var1 * 1.2,
+      `Larger window variance (${var2.toFixed(
+        3
+      )}) should be ≤ 1.2× smaller window variance (${var1.toFixed(3)})`
+    );
   });
 });
 

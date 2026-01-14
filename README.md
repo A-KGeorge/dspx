@@ -5,11 +5,11 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](./LICENSE)
 
-> **A high-performance DSP library with native C++ acceleration, Redis state persistence, and comprehensive time-series processing. Built for Node.js backends processing real-time biosignals, audio, and sensor data.**
+> **A high-performance DSP library with native C++ acceleration, state persistence, and comprehensive time-series processing. Built for Node.js backends processing real-time biosignals, audio, and sensor data.**
 
 ** v1.0.0 Release** Fully tested (500+ tests passing), battle-tested architecture, comprehensive documentation. Ready for production workloads.
 
-A modern DSP library built for Node.js backends processing real-time biosignals, audio streams, and sensor data. Features native C++ filters with full state serialization to Redis, enabling seamless processing across service restarts and distributed workers.
+A modern DSP library built for Node.js backends processing real-time biosignals, audio streams, and sensor data. Features native C++ filters with full state serialization (to Redis, S3, or any storage backend), enabling seamless processing across service restarts and distributed workers.
 
 ---
 
@@ -39,7 +39,7 @@ graph TB
         TS_API["TypeScript API<br/>bindings.ts"]
         TS_TYPES["Type Definitions<br/>types.ts"]
         TS_UTILS["Utilities<br/>CircularLogBuffer, TopicRouter"]
-        TS_REDIS["Redis Backend<br/>backends.ts"]
+        TS_PERSIST["Persistence Backends<br/>backends.ts (Redis, S3, etc.)"]
     end
 
     subgraph "N-API Bridge Layer"
@@ -69,12 +69,12 @@ graph TB
     end
 
     subgraph "External Services"
-        REDIS_DB[("Redis<br/>(State Persistence)")]
+        PERSIST_DB[("Storage<br/>(Redis, S3, etc.)")]
     end
 
     %% Connections
     TS_API --> NAPI
-    TS_REDIS --> REDIS_DB
+    TS_PERSIST --> PERSIST_DB
     NAPI --> PIPELINE
     PIPELINE --> ADAPTER_EXAMPLE
     PIPELINE --> ADAPTER_STATELESS
@@ -97,13 +97,13 @@ graph TB
     classDef cppUtils fill:#a8c5e2,stroke:#7a9fbe,color:#000
     classDef external fill:#dc382d,stroke:#a82820,color:#fff
 
-    class TS_API,TS_TYPES,TS_UTILS,TS_REDIS tsLayer
+    class TS_API,TS_TYPES,TS_UTILS,TS_PERSIST tsLayer
     class CORE_MA,CORE_RMS,CORE_MAV,CORE_VAR,CORE_ZSCORE cppCore
     class CORE_ENGINE cppEngine
     class POLICY_MEAN,POLICY_RMS,POLICY_MAV,POLICY_VAR,POLICY_ZSCORE cppPolicy
     class ADAPTER_MA,ADAPTER_RMS,ADAPTER_RECT,ADAPTER_VAR,ADAPTER_ZSCORE cppAdapter
     class CIRCULAR cppUtils
-    class REDIS_DB external
+    class PERSIST_DB external
 ```
 
 ### Key Architectural Principles
@@ -178,7 +178,7 @@ class MovingAverageFilter {
 
 **3. Layered Design**
 
-- **TypeScript Layer**: User-facing API, type safety, Redis integration
+- **TypeScript Layer**: User-facing API, type safety, state persistence integration
 - **N-API Bridge**: Zero-copy data marshaling between JS and C++
 - **C++ Core**: High-performance DSP algorithms with optimized memory management
 
@@ -192,7 +192,7 @@ State serialization uses a **layered delegation pattern** (see section 2.1):
 
 Full state serialization to JSON enables:
 
-- ✅ Redis persistence for distributed processing
+- ✅ State persistence for distributed processing
 - ✅ Process continuity across restarts
 - ✅ State migration between workers
 - ✅ Data integrity validation on deserialization
@@ -210,7 +210,7 @@ This separation enables:
 - ✅ Reuse of core DSP code in other projects
 - ✅ Type-safe TypeScript API with IntelliSense
 - ✅ Zero-copy performance through N-API
-- ✅ Distributed processing with Redis state sharing
+- ✅ Distributed processing with state sharing (Redis, S3, etc.)
 
 **6. Native C++ Backend**
 
@@ -219,7 +219,7 @@ This separation enables:
 - **Optimized Data Structures**: Circular buffers with O(1) operations
 - **Template-Based**: Generic implementation supports int, float, double
 
-**7. Redis State Persistence**
+**7. State Persistence**
 
 The state serialization includes:
 
@@ -303,14 +303,14 @@ const output = await pipeline.process(input, {
 
 ## 📊 Comparison with Alternatives
 
-| Feature            | dspx              | scipy/numpy         | dsp.js     | Web Audio API   |
-| ------------------ | ----------------- | ------------------- | ---------- | --------------- |
-| TypeScript Support | ✅ Native         | ❌ Python-only      | ⚠️ Partial | ✅ Browser-only |
-| Performance        | ⚡⚡⚡ Native C++ | ⚡⚡⚡⚡            | ⚡ Pure JS | ⚡⚡⚡          |
-| State Persistence  | ✅ Redis          | ❌ Manual           | ❌ None    | ❌ None         |
-| Multi-Channel      | ✅ Built-in       | ✅ NumPy arrays     | ⚠️ Limited | ✅ AudioBuffer  |
-| Node.js Backend    | ✅ Designed for   | ❌ Context switch   | ✅ Yes     | ❌ Browser      |
-| Observability      | ✅ Callbacks      | ❌ Print statements | ❌ None    | ⚠️ Limited      |
+| Feature            | dspx                   | scipy/numpy         | dsp.js     | Web Audio API   |
+| ------------------ | ---------------------- | ------------------- | ---------- | --------------- |
+| TypeScript Support | ✅ Native              | ❌ Python-only      | ⚠️ Partial | ✅ Browser-only |
+| Performance        | ⚡⚡⚡ Native C++      | ⚡⚡⚡⚡            | ⚡ Pure JS | ⚡⚡⚡          |
+| State Persistence  | ✅ Yes (Redis/S3/etc.) | ❌ Manual           | ❌ None    | ❌ None         |
+| Multi-Channel      | ✅ Built-in            | ✅ NumPy arrays     | ⚠️ Limited | ✅ AudioBuffer  |
+| Node.js Backend    | ✅ Designed for        | ❌ Context switch   | ✅ Yes     | ❌ Browser      |
+| Observability      | ✅ Callbacks           | ❌ Print statements | ❌ None    | ⚠️ Limited      |
 
 ---
 
@@ -329,7 +329,7 @@ const output = await pipeline.process(input, {
 - Browser-only applications (use Web Audio API)
 - Python-based ML pipelines (use SciPy/NumPy)
 - Hard real-time embedded systems (use bare C/C++)
-- Ultra-low latency (<1ms) requirements (Redis adds ~1-5ms)
+- Ultra-low latency (<1ms) requirements (state persistence adds ~1-5ms)
 
 ---
 
@@ -355,7 +355,7 @@ The DSP pipeline adds ~0.3-0.4ms overhead per operation for:
 - N-API boundary crossings
 - Output buffer allocation
 
-For **maximum FFT performance** (when you don't need multi-stage processing or Redis persistence), use the direct `FftProcessor`:
+For **maximum FFT performance** (when you don't need multi-stage processing or state persistence), use the direct `FftProcessor`:
 
 ```javascript
 // ⚡ FASTER: Direct FFT (no pipeline overhead)
@@ -372,7 +372,7 @@ const result = pipeline.process(signal); // Still faster than pure JS, but ~0.3m
 **When to use each:**
 
 - **FftProcessor**: Single FFT operations, maximum speed, batch processing
-- **Pipeline**: Multi-stage processing (filter→FFT→analysis), Redis state, complex workflows
+- **Pipeline**: Multi-stage processing (filter→FFT→analysis), stateful processing, complex workflows
 
 With recent optimizations (loop unrolling, memcpy, single-channel fast paths), dspx FFT is now **4-14x faster than fft.js** across all sizes when measured correctly. See [FFT_BENCHMARK_FIX.md](docs/FFT_BENCHMARK_FIX.md) for benchmark methodology.
 
@@ -766,7 +766,7 @@ Implements a simple moving average (SMA) filter with two modes:
 - **Batch mode**: O(n) computation, no state between calls
 - **Moving mode**: O(1) per sample with circular buffer and running sum
 - Per-channel state for multi-channel processing
-- Full state serialization to Redis
+- Full state serialization support
 
 **Example:**
 
@@ -948,7 +948,7 @@ Implements an efficient RMS filter with two modes:
 - **Batch mode**: O(n) computation, no state between calls
 - **Moving mode**: O(1) per sample with circular buffer and running sum of squares
 - Per-channel state for multi-channel processing
-- Full state serialization to Redis
+- Full state serialization support
 - Always positive output (magnitude-based)
 
 **Example:**
@@ -999,7 +999,7 @@ Implements an efficient Mean Absolute Value filter with two modes - commonly use
 - **Batch mode**: O(n) computation, no state between calls
 - **Moving mode**: O(1) per sample with circular buffer and running sum of absolute values
 - Per-channel state for multi-channel EMG processing
-- Full state serialization to Redis
+- Full state serialization support
 - Always non-negative output
 - Scale-invariant: MAV(k·x) = k·MAV(x)
 
@@ -1115,7 +1115,7 @@ Implements variance calculation to measure data spread and variability. Supports
 - **Moving mode**: O(1) per-sample computation using circular buffer with running sums
 - Maintains running sum and running sum of squares for efficient calculation
 - Per-channel state for multi-channel processing
-- Full state serialization to Redis including buffer contents and running values
+- Full state serialization support including buffer contents and running values
 - Variance is always non-negative (uses max(0, calculated) to handle floating-point errors)
 
 **Mathematical Note:**

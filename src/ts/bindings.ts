@@ -2074,6 +2074,119 @@ class DspProcessor {
   }
 
   /**
+   * Resample irregular timestamp data to uniform time grid (production-grade).
+   *
+   * This stage solves the problems of irregular sampling:
+   * - Time-based coordinate system (not index-based)
+   * - Gap detection and configurable handling policies
+   * - Clock drift compensation (regression or PLL)
+   * - Multiple interpolation methods (linear, cubic, sinc)
+   * - Proper extrapolation policies
+   *
+   * **Use Cases:**
+   * - IoT sensors with network jitter
+   * - GPS data with dropped packets
+   * - Medical vitals with irregular sampling
+   * - Audio streams with clock drift
+   * - High-frequency trading data with gaps
+   *
+   * @param params - Time alignment parameters
+   * @param params.targetSampleRate - Target uniform sample rate in Hz (required)
+   * @param params.interpolationMethod - Interpolation method: "linear" (default), "cubic", or "sinc"
+   * @param params.gapPolicy - Gap handling: "interpolate" (default), "zero-fill", "hold", "extrapolate", or "error"
+   * @param params.gapThreshold - Gap detection threshold (multiplier of expected interval, default: 2.0)
+   * @param params.driftCompensation - Clock drift compensation: "none" (default), "regression", or "pll"
+   * @returns this instance for method chaining
+   *
+   * @throws {TypeError} If targetSampleRate is not positive
+   * @throws {Error} If gapPolicy="error" and gap is detected during processing
+   *
+   * @example
+   * // IoT sensor with network jitter → uniform 100Hz grid
+   * const pipeline = createDspPipeline();
+   * pipeline
+   *   .TimeAlignment({
+   *     targetSampleRate: 100,           // 100 Hz output
+   *     interpolationMethod: "linear",   // Fast interpolation
+   *     gapPolicy: "interpolate",        // Fill gaps with interpolation
+   *     gapThreshold: 2.0,               // Detect gaps > 2x expected interval
+   *     driftCompensation: "regression"  // Compensate for clock drift
+   *   })
+   *   .MovingAverage({ windowDuration: 100 })
+   *   .process(irregularSamples, irregularTimestamps, { channels: 1 });
+   *
+   * @example
+   * // GPS tracking with dropped packets → cubic interpolation
+   * const gpsResampler = createDspPipeline();
+   * gpsResampler
+   *   .TimeAlignment({
+   *     targetSampleRate: 10,            // 10 Hz output
+   *     interpolationMethod: "cubic",    // Smooth interpolation
+   *     gapPolicy: "hold",               // Hold last value during gaps
+   *     gapThreshold: 3.0,               // Detect gaps > 300ms
+   *     driftCompensation: "pll"         // Phase-locked loop compensation
+   *   })
+   *   .KalmanFilter({ dimensions: 2, processNoise: 1e-5, measurementNoise: 0.01 });
+   *
+   * @example
+   * // High-frequency trading → error on gap detection
+   * const strictResampler = createDspPipeline();
+   * strictResampler
+   *   .TimeAlignment({
+   *     targetSampleRate: 1000,          // 1kHz output
+   *     interpolationMethod: "sinc",     // Band-limited interpolation
+   *     gapPolicy: "error",              // Fail if gaps detected
+   *     gapThreshold: 1.5,               // Strict gap detection
+   *     driftCompensation: "none"        // Assume perfect clock
+   *   });
+   */
+  TimeAlignment(params: {
+    targetSampleRate: number;
+    interpolationMethod?: "linear" | "cubic" | "sinc";
+    gapPolicy?:
+      | "interpolate"
+      | "zero-fill"
+      | "zeroFill"
+      | "hold"
+      | "extrapolate"
+      | "error";
+    gapThreshold?: number;
+    driftCompensation?: "none" | "regression" | "pll";
+  }): this {
+    const targetSampleRate = params.targetSampleRate;
+
+    if (targetSampleRate <= 0) {
+      throw new TypeError(
+        "TimeAlignment: targetSampleRate must be positive, got " +
+          targetSampleRate
+      );
+    }
+
+    const interpolationMethod = params.interpolationMethod ?? "linear";
+    const gapPolicy = params.gapPolicy ?? "interpolate";
+    const gapThreshold = params.gapThreshold ?? 2.0;
+    const driftCompensation = params.driftCompensation ?? "none";
+
+    if (gapThreshold < 1.0) {
+      throw new TypeError(
+        "TimeAlignment: gapThreshold must be >= 1.0, got " + gapThreshold
+      );
+    }
+
+    this.nativeInstance.addStage("timeAlignment", {
+      targetSampleRate,
+      interpolationMethod,
+      gapPolicy,
+      gapThreshold,
+      driftCompensation,
+    });
+    this.stages.push(
+      `timeAlignment:${targetSampleRate}Hz:${interpolationMethod}:${gapPolicy}`
+    );
+    return this;
+  }
+
+  /**
    * Apply leaky integration (accumulation) using IIR filter.
    *
    * Implements: y[n] = x[n] + α * y[n-1]
@@ -3572,6 +3685,13 @@ class DspProcessor {
       // Sample-based mode: process(samples, options)
       // Fix: ensure options is correctly formed even if arg is undefined/null
       options = { channels: 1, ...(timestampsOrOptions || {}) };
+
+      // Check if TimeAlignment stage requires timestamps
+      if (this.stages.some((stage) => stage.startsWith("timeAlignment:"))) {
+        throw new TypeError(
+          "TimeAlignment stage requires timestamps. Call process(samples, timestamps, options) instead."
+        );
+      }
       // Optimization: Pass undefined timestamps, let C++ generate them
     }
 

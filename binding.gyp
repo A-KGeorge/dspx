@@ -29,7 +29,8 @@
         "src/native/utils/TimeSeriesBuffer.cc",
         "src/native/adapters/FilterStage.cc",
         "src/native/adapters/FilterBankStage.cc",
-        "src/native/adapters/FftStage.cc"
+        "src/native/adapters/FftStage.cc",
+        "src/native/adapters/TimeAlignmentStage.cc"
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",

@@ -2,9 +2,28 @@
 
 ## Overview
 
-This guide explains how to process data with irregular timestamps through DSP pipelines, including convolution and other stages.
+This guide explains how to process data with irregular timestamps through DSP pipelines. There are two main approaches:
 
-## Important Concepts
+1. **Pass-through approach** - Let timestamps flow through the pipeline (existing stages)
+2. **Time-alignment approach** - Resample irregular data to uniform time grid (NEW: TimeAlignment stage)
+
+Choose based on your use case:
+
+- Use **pass-through** when stages can handle irregular timing naturally
+- Use **TimeAlignment** when you need uniform sampling for downstream processing
+
+---
+
+## Table of Contents
+
+- [Pass-Through Approach (Legacy)](#pass-through-approach-legacy)
+- [TimeAlignment Approach (Recommended)](#timealignment-approach-recommended)
+- [Comparison: TimeAlignment vs Legacy](#comparison-timealignment-vs-legacy)
+- [Production Examples](#production-examples)
+
+---
+
+## Pass-Through Approach (Legacy)
 
 ### How Timestamps Flow Through Pipelines
 
@@ -279,6 +298,149 @@ pipeline
 // The pipeline intelligently mixes sample-based and time-based processing
 const output = await pipeline.process(samples, timestamps, { channels: 1 });
 ```
+
+## Summary
+
+| Aspect                   | Pass-Through Approach                | TimeAlignment Approach                         |
+| ------------------------ | ------------------------------------ | ---------------------------------------------- |
+| **Timestamp Flow**       | Automatic through entire pipeline    | Resamples to uniform grid at alignment stage   |
+| **Explicit Resampling**  | Not needed for time-based processing | Explicit TimeAlignment stage required          |
+| **Time-Based Windows**   | Use `windowDuration` parameter       | Not needed (uniform after alignment)           |
+| **Sample-Based Windows** | Use `windowSize` parameter           | Can use sample-based after alignment           |
+| **Gap Handling**         | Stage-dependent                      | Configurable policies (interpolate, hold, etc) |
+| **Clock Drift**          | No compensation                      | Built-in drift compensation (regression, PLL)  |
+| **Use Case**             | Simple pipelines, time-based windows | Complex pipelines, uniform sampling required   |
+
+---
+
+## TimeAlignment Approach (Recommended)
+
+For production systems with irregular timestamps, use the **TimeAlignment stage** to resample data to a uniform time grid. This is especially important for:
+
+- IoT sensors with network jitter
+- GPS tracking with dropped packets
+- Medical vitals monitoring with multiple sensor rates
+- Audio streams with clock drift
+- Event-driven data that needs uniform processing
+
+### Basic Example
+
+```javascript
+import { createDspPipeline } from "dspx";
+
+const pipeline = createDspPipeline();
+
+// Resample irregular data to uniform 10 Hz (100ms intervals)
+pipeline.TimeAlignment({
+  targetSampleRate: 10, // Target sample rate (Hz)
+  interpolationMethod: "linear", // linear, cubic, or sinc
+  gapPolicy: "interpolate", // How to handle gaps
+  gapThreshold: 2.0, // Detect gaps > 200ms
+  driftCompensation: "regression", // Compensate for clock drift
+});
+
+// Irregular sensor data
+const samples = new Float32Array([1.2, 3.4, 2.1, 4.5, 3.3]);
+const timestamps = new Float32Array([0, 100, 250, 400, 500]); // Irregular!
+
+// Process - outputs uniform 100ms grid
+const result = await pipeline.process(samples, timestamps, { channels: 1 });
+// Result: 6 samples at [0, 100, 200, 300, 400, 500]ms
+```
+
+### Configuration Options
+
+#### Interpolation Methods
+
+| Method   | Description                          | Use Case                          |
+| -------- | ------------------------------------ | --------------------------------- |
+| `linear` | Linear interpolation (C0 continuous) | Fast, general-purpose             |
+| `cubic`  | Catmull-Rom spline (C1 continuous)   | Smooth trajectories (GPS, motion) |
+| `sinc`   | Band-limited (windowed sinc, 8-tap)  | Audio, high-quality resampling    |
+
+#### Gap Policies
+
+| Policy        | Behavior                                    | Use Case                           |
+| ------------- | ------------------------------------------- | ---------------------------------- |
+| `interpolate` | Interpolate linearly across gap (default)   | Small gaps, continuous signals     |
+| `zero-fill`   | Fill gaps with zeros                        | Audio (silence), missing data      |
+| `hold`        | Hold last valid value before gap            | GPS (position), vitals (safe hold) |
+| `extrapolate` | Extrapolate from last two samples           | Short-term prediction              |
+| `error`       | Throw error when gap detected (strict mode) | Critical applications              |
+
+#### Drift Compensation
+
+| Method       | Description                                    | Use Case          |
+| ------------ | ---------------------------------------------- | ----------------- |
+| `none`       | No drift compensation (default)                | Short recordings  |
+| `regression` | Linear regression to estimate true sample rate | Long recordings   |
+| `pll`        | Phase-locked loop (adaptive tracking)          | Real-time streams |
+
+### Production Examples
+
+See [examples/timeseries/production-irregular-timestamps.ts](../../examples/timeseries/production-irregular-timestamps.ts) for complete runnable examples:
+
+1. **IoT Sensor with Network Jitter** - Temperature sensor over WiFi
+2. **GPS Tracking with Dropouts** - Vehicle tracking with signal loss
+3. **Medical Vitals Monitoring** - Multi-rate sensors (HR, SpO2, BP)
+4. **Audio Streams with Clock Drift** - Network audio with clock mismatch
+5. **Event-Driven Comparison** - TimeAlignment vs legacy Interpolate
+6. **Multi-Channel Sensor Fusion** - IMU data (accel + gyro)
+
+Run examples:
+
+```bash
+node --import tsx examples/timeseries/production-irregular-timestamps.ts
+```
+
+---
+
+## Comparison: TimeAlignment vs Legacy
+
+### When to Use TimeAlignment
+
+✅ **Use TimeAlignment when:**
+
+- Data has irregular timestamps with gaps or jitter
+- Downstream stages require uniform sampling
+- Need explicit gap detection and handling
+- Clock drift is present (long recordings)
+- Processing multi-rate sensors (sensor fusion)
+
+```javascript
+pipeline
+  .TimeAlignment({ targetSampleRate: 100, gapPolicy: "hold" })
+  .filter({ type: "butterworth", mode: "lowpass", cutoffFrequency: 20 })
+  .MovingAverage({ mode: "moving", windowSize: 10 }); // Sample-based OK after alignment
+```
+
+### When to Use Legacy Pass-Through
+
+✅ **Use pass-through (no TimeAlignment) when:**
+
+- Data already has uniform timestamps
+- Using time-based windows (`windowDuration`)
+- Stages naturally handle irregular timing
+- No gap detection needed
+
+```javascript
+pipeline
+  .convolution({ kernel: myKernel, mode: "moving" })
+  .Rms({ mode: "moving", windowDuration: 100 }); // Time-based, handles irregular
+```
+
+### Key Differences
+
+| Feature              | TimeAlignment             | Legacy Pass-Through                 |
+| -------------------- | ------------------------- | ----------------------------------- |
+| Gap Detection        | ✅ Configurable policies  | ❌ No detection                     |
+| Clock Drift          | ✅ Compensation available | ❌ No compensation                  |
+| Uniform Output       | ✅ Guaranteed             | ❌ Preserves irregular              |
+| Time-Based Windows   | ⚠️ Not needed after       | ✅ Use windowDuration               |
+| Sample-Based Windows | ✅ Use windowSize after   | ⚠️ May give unexpected results      |
+| Interpolation        | ✅ Time-based (accurate)  | ❌ Index-based (legacy Interpolate) |
+
+---
 
 ## Summary
 

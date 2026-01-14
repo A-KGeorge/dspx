@@ -102,7 +102,7 @@ if (!timestamps) {
 **Impact**:
 
 - Pipeline evolution is difficult
-- All Redis states become invalid after stage changes
+- All persisted states become invalid after stage changes
 - No backward compatibility
 
 **Possible Solutions** (Future):
