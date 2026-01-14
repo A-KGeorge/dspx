@@ -40,6 +40,9 @@
 #include "adapters/KalmanFilterStage.h"             // Kalman Filter stage
 #include "adapters/TimeAlignmentStage.h"            // Time Alignment stage
 
+#include <iostream>
+#include <thread>  // For std::this_thread in debug code
+
 namespace dsp
 {
     // Forward declarations for bindings
