@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.0
+
+### Minor Changes
+
+- [`a8da6e5`](https://github.com/A-KGeorge/dspx/commit/a8da6e50cccf6679b0ef74e1027d2c70f0df062f) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Production-Grade Irregular Timestamp Support
+
 ## 1.3.7
 
 ### Patch Changes
