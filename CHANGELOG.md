@@ -1,5 +1,11 @@
 # dspx
 
+## 1.3.7
+
+### Patch Changes
+
+- [`d249a49`](https://github.com/A-KGeorge/dspx/commit/d249a496d29939dc922045d90766d73f7cee1f0c) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Added toon for all formats
+
 ## 1.3.6
 
 ### Patch Changes
