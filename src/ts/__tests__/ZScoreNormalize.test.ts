@@ -359,7 +359,10 @@ describe("Z-Score Normalize Filter", () => {
       // Corrupt the running sum
       state.stages[0].state.channels[0].runningSum = 999;
 
-      const pipeline2 = createDspPipeline();
+      const pipeline2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      });
       pipeline2.ZScoreNormalize({ mode: "moving", windowSize: 3 });
 
       // Should throw validation error
@@ -382,7 +385,10 @@ describe("Z-Score Normalize Filter", () => {
       // Corrupt the window size
       state.stages[0].state.windowSize = 10;
 
-      const pipeline2 = createDspPipeline();
+      const pipeline2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      });
       pipeline2.ZScoreNormalize({ mode: "moving", windowSize: 5 });
 
       // Should throw validation error

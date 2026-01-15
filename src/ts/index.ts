@@ -170,3 +170,4 @@ export type {
   PatternMatcher,
 } from "./TopicRouter.js";
 export type { BackendConfig } from "./backends.js";
+export type { StateResilienceConfig } from "./StateResilienceConfig.js";

@@ -292,7 +292,9 @@ describe("Variance Filter", () => {
 
       // Save state
       const stateJson = await pipeline.saveState();
-      const state = JSON.parse(stateJson);
+      const state = JSON.parse(
+        typeof stateJson === "string" ? stateJson : stateJson.toString()
+      );
 
       // Verify state structure
       assert.strictEqual(state.stages.length, 1);
@@ -377,14 +379,19 @@ describe("Variance Filter", () => {
       await pipeline.process(input, { sampleRate: 1000, channels: 1 });
 
       const stateJson = await pipeline.saveState();
-      const state = JSON.parse(stateJson);
+      const state = JSON.parse(
+        typeof stateJson === "string" ? stateJson : stateJson.toString()
+      );
 
       // Corrupt the running sum
       state.stages[0].state.channels[0].runningSum = 9999;
 
       const corruptedStateJson = JSON.stringify(state);
 
-      const pipeline2 = createDspPipeline().Variance({
+      const pipeline2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      }).Variance({
         mode: "moving",
         windowSize: 5,
       });
@@ -409,14 +416,18 @@ describe("Variance Filter", () => {
       await pipeline.process(input, { sampleRate: 1000, channels: 1 });
 
       const stateJson = await pipeline.saveState();
-      const state = JSON.parse(stateJson);
-
+      const state = JSON.parse(
+        typeof stateJson === "string" ? stateJson : stateJson.toString()
+      );
       // Change window size
       state.stages[0].state.windowSize = 10;
 
       const modifiedStateJson = JSON.stringify(state);
 
-      const pipeline2 = createDspPipeline().Variance({
+      const pipeline2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      }).Variance({
         mode: "moving",
         windowSize: 5,
       });

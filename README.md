@@ -1614,7 +1614,77 @@ See the [project roadmap](https://github.com/A-KGeorge/dspx/blob/main/ROADMAP.md
 
 ---
 
-## 🔧 Advanced Features
+## �️ State Persistence Resilience
+
+dspx provides lightweight built-in retry logic for transient failures, with seamless integration for production-grade circuit breakers.
+
+### Built-in Features
+
+- **Automatic Retries**: 3 attempts with exponential backoff (configurable)
+- **Optional Fallback**: Auto-clear state on persistent failures
+- **Circuit Breaker Ready**: Disabled by default to allow integration with battle-tested libraries
+
+### Default Configuration
+
+```typescript
+import { createDspPipeline } from "dspx";
+
+const pipeline = createDspPipeline(); // Retries enabled, circuit breaker disabled
+
+// Save with automatic retries
+const state = await pipeline.saveState();
+await redis.set("dsp:state", state);
+
+// Load with retries (throws on failure)
+const stateFromRedis = await redis.get("dsp:state");
+if (stateFromRedis) {
+  await pipeline.loadState(stateFromRedis);
+}
+```
+
+### Production-Grade Circuit Breaking with Opossum
+
+For critical workloads, wrap state persistence with **[opossum](https://www.npmjs.com/package/opossum)**:
+
+```bash
+npm install opossum
+```
+
+```typescript
+import CircuitBreaker from "opossum";
+
+const saveBreaker = new CircuitBreaker(
+  async (state: string | Buffer) => {
+    await redis.set("dsp:state", state);
+  },
+  {
+    timeout: 2000, // Fail if >2s
+    errorThresholdPercentage: 50, // Trip after 50% failures
+    resetTimeout: 30000, // Try recovery after 30s
+  }
+);
+
+saveBreaker.fallback(() => {
+  console.warn("Circuit OPEN - skipping state save");
+});
+
+// Usage
+const state = await pipeline.saveState({ format: "toon" });
+await saveBreaker.fire(state);
+```
+
+**📚 [Full Resilience Documentation](./docs/STATE_RESILIENCE.md)** | **💡 [Opossum Example](./examples/resilience-with-opossum.cjs)**
+
+Includes examples for:
+
+- Circuit breaker configuration and monitoring
+- Prometheus metrics export
+- Alternative libraries (polly.js, cockatiel)
+- Production patterns (graceful shutdown, serverless handlers)
+
+---
+
+## �🔧 Advanced Features
 
 For production deployments, the library provides comprehensive observability and monitoring capabilities:
 

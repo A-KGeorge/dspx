@@ -41,7 +41,7 @@
 #include "adapters/TimeAlignmentStage.h"            // Time Alignment stage
 
 #include <iostream>
-#include <thread>  // For std::this_thread in debug code
+#include <thread> // For std::this_thread in debug code
 
 namespace dsp
 {
@@ -2653,11 +2653,29 @@ namespace dsp
     }
 
     /**
-     * Load pipeline state from JSON string or TOON Buffer with inline validation.
-     * NEW BEHAVIOR: Only loads state if saved stages match current stages EXACTLY.
-     * This prevents pipeline corruption from incompatible state.
+     * Load pipeline state from JSON string or TOON Buffer with validation.
      *
-     * If stage types or count don't match, throws an error instead of trying to merge.
+     * RESILIENCE FEATURES:
+     * - Validates stage types and count before loading
+     * - TOON path: Validates upfront, deserializes in-place
+     * - JSON path: Build newStages → Validate → Atomic swap (fully transactional)
+     * - Prevents pipeline corruption from incompatible state
+     *
+     * BEHAVIOR:
+     * - Only loads state if saved stages match current stages EXACTLY (type and count)
+     * - TOON: Validates all stages before deserialization, fails fast on mismatch
+     * - JSON: Builds temporary stages, only swaps if fully successful
+     * - Throws error with detailed message if validation or loading fails
+     *
+     * ERROR HANDLING:
+     * - Stage count mismatch: Abort immediately (TOON may have partial changes)
+     * - Stage type mismatch: Abort immediately (TOON may have partial changes)
+     * - Deserialization error: Throws (TOON may have partial state changes)
+     * - Note: TOON format modifies stages in-place, cannot rollback
+     *
+     * @param info[0] - JSON string or TOON Buffer containing pipeline state
+     * @returns Boolean - true if successful
+     * @throws Error if validation or deserialization fails
      */
     Napi::Value DspPipeline::LoadState(const Napi::CallbackInfo &info)
     {
@@ -2712,28 +2730,42 @@ namespace dsp
 
         if (toonDataPtr != nullptr && toonDataLen > 0)
         {
+            // TOON binary path with upfront validation
             try
             {
                 const bool debugToon = std::getenv("DSPX_DEBUG_TOON") != nullptr;
+
+                if (debugToon)
+                {
+                    std::cout << "[TOON] Parsing and validating TOON buffer" << std::endl;
+                }
+
                 dsp::toon::Deserializer deserializer(toonDataPtr, toonDataLen);
                 deserializer.consumeToken(dsp::toon::T_OBJECT_START);
                 std::string key = deserializer.readString();
                 double timestamp = deserializer.readDouble();
                 key = deserializer.readString();
                 int32_t savedStageCount = deserializer.readInt32();
+
+                // Validate stage count upfront
+                if (static_cast<size_t>(savedStageCount) != m_stages.size())
+                {
+                    throw std::runtime_error("TOON Load: Stage count mismatch. Saved state has " +
+                                             std::to_string(savedStageCount) + " stages, current has " +
+                                             std::to_string(m_stages.size()) + ".");
+                }
+
                 key = deserializer.readString();
                 deserializer.consumeToken(dsp::toon::T_ARRAY_START);
 
-                // SIMPLER APPROACH: Validate and load in a single pass
-                // For each saved stage, check type matches before deserializing
+                // Validate stage types and deserialize
                 size_t stageIdx = 0;
                 while (deserializer.peekToken() != dsp::toon::T_ARRAY_END)
                 {
-                    // Check we haven't exceeded current stage count
                     if (stageIdx >= m_stages.size())
                     {
-                        throw std::runtime_error("TOON Load: Stage count mismatch. Saved state has more stages than current pipeline (" +
-                                                 std::to_string(m_stages.size()) + ").");
+                        throw std::runtime_error("TOON Load: Unexpected extra stage in buffer at index " +
+                                                 std::to_string(stageIdx) + ".");
                     }
 
                     deserializer.consumeToken(dsp::toon::T_OBJECT_START);
@@ -2746,8 +2778,7 @@ namespace dsp
                     {
                         throw std::runtime_error("TOON Load: Stage type mismatch at index " +
                                                  std::to_string(stageIdx) + ". Expected '" + currentType +
-                                                 "', got '" + savedType +
-                                                 "'. Cannot load incompatible state.");
+                                                 "', got '" + savedType + "'.");
                     }
 
                     deserializer.readString(); // "state" key
@@ -2758,25 +2789,19 @@ namespace dsp
                                   << "]: type='" << savedType << "'" << std::endl;
                     }
 
-                    // Deserialize directly into the existing stage
+                    // Deserialize into the existing stage
                     m_stages[stageIdx]->deserializeToon(deserializer);
 
                     deserializer.consumeToken(dsp::toon::T_OBJECT_END);
                     stageIdx++;
                 }
 
-                // Verify we loaded all current stages
+                // Final validation
                 if (stageIdx != m_stages.size())
                 {
-                    throw std::runtime_error("TOON Load: Stage count mismatch. Saved state has " +
-                                             std::to_string(stageIdx) + " stages, current has " +
-                                             std::to_string(m_stages.size()) + ".");
-                }
-
-                if (debugToon)
-                {
-                    std::cout << "[TOON] Validation passed and loaded " << stageIdx
-                              << " stages successfully" << std::endl;
+                    throw std::runtime_error("TOON Load: Stage count mismatch after parsing. Expected " +
+                                             std::to_string(m_stages.size()) + " stages, parsed " +
+                                             std::to_string(stageIdx) + ".");
                 }
 
                 deserializer.consumeToken(dsp::toon::T_ARRAY_END);
@@ -2784,15 +2809,16 @@ namespace dsp
 
                 if (debugToon)
                 {
-                    std::cout << "[TOON] Load complete. Restored state into "
-                              << stageIdx << " stages" << std::endl;
+                    std::cout << "[TOON] Successfully loaded " << stageIdx << " stages." << std::endl;
                 }
+
                 return Napi::Boolean::New(env, true);
             }
             catch (const std::exception &e)
             {
-                Napi::Error::New(env, std::string("TOON Load Failed: ") + e.what()).ThrowAsJavaScriptException();
-                return Napi::Boolean::New(env, false);
+                std::string errorMsg = std::string("TOON Load failed: ") + e.what();
+                Napi::Error::New(env, errorMsg).ThrowAsJavaScriptException();
+                return env.Undefined();
             }
         }
 
@@ -2869,6 +2895,7 @@ namespace dsp
                             auto newStage = it->second(stageState);
 
                             // Restore the full internal buffer state
+                            // NOTE: Validation errors here should propagate (fail-fast)
                             newStage->deserializeState(stageState);
 
                             // Add to our new pipeline
@@ -2876,7 +2903,18 @@ namespace dsp
                         }
                         catch (const std::exception &e)
                         {
-                            // If reconstruction fails (e.g. missing params), log warning and skip
+                            // Check if this is a validation error (contains keywords like "validation", "mismatch")
+                            std::string errorMsg = e.what();
+                            if (errorMsg.find("validation") != std::string::npos ||
+                                errorMsg.find("mismatch") != std::string::npos ||
+                                errorMsg.find("Validation") != std::string::npos ||
+                                errorMsg.find("Mismatch") != std::string::npos)
+                            {
+                                // Validation error - propagate it (fail the entire load)
+                                throw;
+                            }
+
+                            // Construction error (e.g., missing params) - log warning and skip
                             std::cerr << "Warning: Failed to reconstruct stage " << savedType
                                       << ": " << e.what() << std::endl;
                         }

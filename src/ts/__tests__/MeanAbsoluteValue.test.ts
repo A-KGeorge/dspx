@@ -177,8 +177,15 @@ describe("Mean Absolute Value Filter", () => {
         state.stages[0].state.channels[0].buffer = null;
       }
 
+      // Create new processor with fallback disabled for this validation test
+      const processor2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      });
+      processor2.MeanAbsoluteValue({ mode: "moving", windowSize: 3 });
+
       await assert.rejects(
-        async () => processor.loadState(JSON.stringify(state)),
+        async () => processor2.loadState(JSON.stringify(state)),
         /array/i
       );
     });

@@ -157,7 +157,10 @@ describe("RMS Filter", () => {
       }
 
       // Should throw when loading corrupted state
-      const processor2 = createDspPipeline();
+      const processor2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      });
       processor2.Rms({ mode: "moving", windowSize: 3 });
       await assert.rejects(
         async () => await processor2.loadState(JSON.stringify(state)),
@@ -178,7 +181,10 @@ describe("RMS Filter", () => {
       }
 
       // Should throw when loading corrupted state
-      const processor2 = createDspPipeline();
+      const processor2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      });
       processor2.Rms({ mode: "moving", windowSize: 3 });
       await assert.rejects(
         async () => await processor2.loadState(JSON.stringify(state)),

@@ -385,7 +385,10 @@ describe("Redis State Persistence", () => {
       await redis.set(stateKey, JSON.stringify(state));
 
       // Should throw validation error
-      const processor2 = createDspPipeline();
+      const processor2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      });
       processor2.MovingAverage({ mode: "moving", windowSize: 3 });
 
       const corruptedState = await redis.get(stateKey);

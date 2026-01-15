@@ -204,12 +204,15 @@ describe("TOON Binary Serialization", () => {
 
     // Try to load into different pipeline structure
     processor.dispose();
-    processor = createDspPipeline();
+    processor = createDspPipeline({
+      fallbackOnLoadFailure: false,
+      maxRetries: 0,
+    });
     processor.CumulativeMovingAverage({ mode: "moving" }); // Different stage type!
 
     await assert.rejects(
       async () => await processor.loadState(toonState),
-      /TOON Load Failed|Pipeline structure mismatch/,
+      /TOON Load [Ff]ailed|Pipeline structure mismatch/,
       "Should throw error for mismatched pipeline"
     );
   });

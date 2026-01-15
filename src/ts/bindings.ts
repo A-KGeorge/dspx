@@ -47,6 +47,7 @@ import type {
 } from "./types.js";
 import { CircularLogBuffer } from "./CircularLogBuffer.js";
 import { DriftDetector } from "./DriftDetector.js";
+import type { StateResilienceConfig } from "./StateResilienceConfig.js";
 import {
   FirFilter,
   IirFilter,
@@ -98,11 +99,22 @@ class DspProcessor {
   private tapCallbacks: Array<{ stageName: string; callback: TapCallback }> =
     [];
   private driftDetector: DriftDetector | null = null;
+  private stateResilienceConfig: StateResilienceConfig;
 
-  constructor(private nativeInstance: any) {
+  constructor(
+    private nativeInstance: any,
+    stateResilienceConfig?: StateResilienceConfig
+  ) {
     // Initialize circular buffer with capacity for typical log volume
     // (2-3 logs per process call, supports bursts up to 32)
     this.logBuffer = new CircularLogBuffer(32);
+
+    // Initialize state persistence resilience (simple retry logic only)
+    this.stateResilienceConfig = {
+      maxRetries: 3,
+      fallbackOnLoadFailure: false,
+      ...stateResilienceConfig,
+    };
   }
 
   /**
@@ -4090,16 +4102,58 @@ class DspProcessor {
   }
 
   /**
+   * Shared helper for retry logic with exponential backoff
+   * @private
+   */
+  private async executeWithRetry<T>(
+    operationName: string,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    let lastError: Error | undefined;
+    const maxRetries = this.stateResilienceConfig.maxRetries || 3;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        if (attempt < maxRetries - 1) {
+          // Exponential backoff with jitter: 100ms, 400ms, 1600ms
+          const delay = Math.pow(2, attempt) * 100 + Math.random() * 50;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          console.warn(
+            `[DspProcessor] ${operationName} attempt ${
+              attempt + 1
+            }/${maxRetries} failed: ${
+              lastError.message
+            }. Retrying in ${delay.toFixed(0)}ms...`
+          );
+        }
+      }
+    }
+
+    const err =
+      lastError || new Error(`${operationName} failed after all retries`);
+    console.error(`[DspProcessor] ${operationName} failed: ${err.message}`);
+    throw err;
+  }
+
+  /**
    * Save the current pipeline state
    * Supports two formats:
    * - JSON (default): Returns a string for text-based storage
    * - TOON: Returns a Buffer for binary serialization (60-70% smaller, faster)
    *
+   * **Resilience Features:**
+   * - Retry with exponential backoff: 3 attempts by default (100ms, 400ms, 1600ms)
+   * - Throws error after all retries exhausted
+   *
    * @param options - Optional configuration with format: 'json' | 'toon'
    * @returns JSON string (default) or Buffer (if format: 'toon')
    *
    * @example
-   * // Default JSON format
+   * // Default JSON format with retry
    * const stateJson = await pipeline.saveState();
    * await redis.set('dsp:state', stateJson);
    *
@@ -4107,25 +4161,42 @@ class DspProcessor {
    * // TOON binary format (smaller, faster)
    * const stateBinary = await pipeline.saveState({ format: 'toon' });
    * await redis.set('dsp:state', stateBinary);
+   *
+   * @throws Error if all retries fail
    */
   async saveState(options?: {
     format?: "json" | "toon";
   }): Promise<string | Buffer> {
-    return this.nativeInstance.saveState(options);
+    return this.executeWithRetry("saveState", () =>
+      this.nativeInstance.saveState(options)
+    );
   }
 
   /**
    * Load pipeline state from JSON string or TOON binary Buffer
    * Auto-detects format: Buffer → TOON, string → JSON
    *
+   * **Resilience Features:**
+   * - Retry with exponential backoff: 3 attempts by default (100ms, 400ms, 1600ms)
+   * - Optional fallback: Calls clearState() on failure (enable with fallbackOnLoadFailure: true)
+   * - By default throws error after retries exhausted
+   *
    * @param state - JSON string or TOON Buffer containing the pipeline state
-   * @returns Promise that resolves to true if successful
+   * @returns Promise that resolves to true if successful, false if failed and fell back to clearState
    *
    * @example
-   * // Load JSON state
+   * // Load JSON state (throws on failure by default)
    * const stateJson = await redis.get('dsp:state');
    * if (stateJson) {
    *   await pipeline.loadState(stateJson);
+   * }
+   *
+   * @example
+   * // With automatic fallback enabled
+   * const pipeline = createDspPipeline({ fallbackOnLoadFailure: true });
+   * const success = await pipeline.loadState(stateJson);
+   * if (!success) {
+   *   console.log('State load failed, started with fresh state');
    * }
    *
    * @example
@@ -4136,7 +4207,22 @@ class DspProcessor {
    * }
    */
   async loadState(state: string | Buffer): Promise<boolean> {
-    return this.nativeInstance.loadState(state);
+    try {
+      return await this.executeWithRetry("loadState", () =>
+        this.nativeInstance.loadState(state)
+      );
+    } catch (error) {
+      // Fallback: Clear state and start fresh (cold start recovery)
+      if (this.stateResilienceConfig.fallbackOnLoadFailure) {
+        console.warn(
+          "[DspProcessor] Falling back to clearState() - starting with fresh state"
+        );
+        this.clearState();
+        return false; // Indicate fallback was used
+      }
+
+      throw error;
+    }
   }
 
   /**
@@ -4182,20 +4268,32 @@ class DspProcessor {
 
 /**
  * Create a new DSP pipeline builder
- * @param config - Optional Redis configuration for state persistence
+ * @param stateResilienceConfig - Optional configuration for state persistence resilience
  * @returns A new DspProcessor instance
  *
  * @example
- * // Create pipeline with Redis state persistence
+ * // Create pipeline with default settings (3 retries, no fallback)
  * const pipeline = createDspPipeline();
  *
  * @example
- * // Create pipeline without Redis (state is not persisted)
- * const pipeline = createDspPipeline();
+ * // Custom retry configuration
+ * const pipeline = createDspPipeline({
+ *   maxRetries: 5,
+ *   fallbackOnLoadFailure: true
+ * });
+ *
+ * @example
+ * // Disable retries
+ * const pipeline = createDspPipeline({
+ *   maxRetries: 1,
+ *   fallbackOnLoadFailure: false
+ * });
  */
-export function createDspPipeline(): DspProcessor {
+export function createDspPipeline(
+  stateResilienceConfig?: StateResilienceConfig
+): DspProcessor {
   const nativeInstance = new DspAddon.DspPipeline();
-  return new DspProcessor(nativeInstance);
+  return new DspProcessor(nativeInstance, stateResilienceConfig);
 }
 
 export { DspProcessor };

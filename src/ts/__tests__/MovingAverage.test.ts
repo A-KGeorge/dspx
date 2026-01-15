@@ -199,7 +199,9 @@ describe("MovingAverage Filter", () => {
 
       // Save state
       const stateJson = await processor.saveState();
-      const state = JSON.parse(stateJson);
+      const state = JSON.parse(
+        typeof stateJson === "string" ? stateJson : stateJson.toString()
+      );
 
       assert.ok(state);
       assert.ok(state.timestamp);
@@ -250,7 +252,9 @@ describe("MovingAverage Filter", () => {
       await processor.process(new Float32Array([1, 2, 3]), DEFAULT_OPTIONS);
 
       const stateJson = await processor.saveState();
-      const state = JSON.parse(stateJson);
+      const state = JSON.parse(
+        typeof stateJson === "string" ? stateJson : stateJson.toString()
+      );
 
       // Corrupt the runningSum (note: it's in state.stages[0].state.channels)
       if (state.stages[0].state.channels && state.stages[0].state.channels[0]) {
@@ -258,7 +262,10 @@ describe("MovingAverage Filter", () => {
       }
 
       // Should throw when loading corrupted state
-      const processor2 = createDspPipeline();
+      const processor2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      });
       try {
         processor2.MovingAverage({ mode: "moving", windowSize: 3 }); // Must match original pipeline
         await assert.rejects(
@@ -275,7 +282,9 @@ describe("MovingAverage Filter", () => {
       await processor.process(new Float32Array([1, 2, 3]), DEFAULT_OPTIONS);
 
       const stateJson = await processor.saveState();
-      const state = JSON.parse(stateJson);
+      const state = JSON.parse(
+        typeof stateJson === "string" ? stateJson : stateJson.toString()
+      );
 
       // Corrupt the window size parameter itself
       if (state.stages[0].state) {
@@ -283,7 +292,10 @@ describe("MovingAverage Filter", () => {
       }
 
       // Should throw when loading corrupted state
-      const processor2 = createDspPipeline();
+      const processor2 = createDspPipeline({
+        fallbackOnLoadFailure: false,
+        maxRetries: 0,
+      });
       try {
         processor2.MovingAverage({ mode: "moving", windowSize: 3 }); // Original window size
         await assert.rejects(
