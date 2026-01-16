@@ -58,11 +58,11 @@ namespace dsp
          * TimeAlignmentStage: Production-grade irregular timestamp resampling
          *
          * This stage solves the problems identified in Gemini's analysis:
-         * 1. ✅ Time-based coordinate system (not index-based)
-         * 2. ✅ Gap detection and handling policies
-         * 3. ✅ Clock drift compensation
-         * 4. ✅ Proper SIMD optimization for irregular data
-         * 5. ✅ Configurable extrapolation/error handling
+         * 1. Time-based coordinate system (not index-based)
+         * 2. Gap detection and handling policies
+         * 3. Clock drift compensation
+         * 4. Proper SIMD optimization for irregular data
+         * 5. Configurable extrapolation/error handling
          *
          * Usage:
          *   auto stage = TimeAlignmentStage(

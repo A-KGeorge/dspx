@@ -18,13 +18,14 @@
 
 // Debug assertion macro
 #ifdef _DEBUG
-    #define ASSERT_BOUNDS(idx, maxSize, msg) \
-        if ((idx) >= (maxSize)) { \
-            std::cerr << "[BOUNDS ERROR] " << msg << ": idx=" << (idx) << ", max=" << (maxSize) << std::endl; \
-            throw std::out_of_range(msg); \
-        }
+#define ASSERT_BOUNDS(idx, maxSize, msg)                                                                  \
+    if ((idx) >= (maxSize))                                                                               \
+    {                                                                                                     \
+        std::cerr << "[BOUNDS ERROR] " << msg << ": idx=" << (idx) << ", max=" << (maxSize) << std::endl; \
+        throw std::out_of_range(msg);                                                                     \
+    }
 #else
-    #define ASSERT_BOUNDS(idx, maxSize, msg) ((void)0)
+#define ASSERT_BOUNDS(idx, maxSize, msg) ((void)0)
 #endif
 
 // Helper function to check debug flag
@@ -234,13 +235,58 @@ namespace dsp
                                                  std::to_string(outIdx) + ", targetTime=" + std::to_string(targetTime));
 
                     case GapPolicy::ZERO_FILL:
+                    {
+                        size_t writeIdx = outIdx * channels;
+                        ASSERT_BOUNDS(writeIdx + channels - 1, outputSize, "ZERO_FILL output write");
+
+#if defined(HAS_AVX2)
+                        // AVX2: Zero 8 floats at a time
+                        __m256 zero = _mm256_setzero_ps();
+                        int ch = 0;
+                        for (; ch + 8 <= channels; ch += 8)
+                        {
+                            _mm256_storeu_ps(&outputBuffer[writeIdx + ch], zero);
+                        }
+                        // Scalar remainder
+                        for (; ch < channels; ++ch)
+                        {
+                            outputBuffer[writeIdx + ch] = 0.0f;
+                        }
+#elif defined(HAS_SSE)
+                        // SSE: Zero 4 floats at a time
+                        __m128 zero = _mm_setzero_ps();
+                        int ch = 0;
+                        for (; ch + 4 <= channels; ch += 4)
+                        {
+                            _mm_storeu_ps(&outputBuffer[writeIdx + ch], zero);
+                        }
+                        // Scalar remainder
+                        for (; ch < channels; ++ch)
+                        {
+                            outputBuffer[writeIdx + ch] = 0.0f;
+                        }
+#elif defined(HAS_NEON)
+                        // NEON: Zero 4 floats at a time
+                        float32x4_t zero = vdupq_n_f32(0.0f);
+                        int ch = 0;
+                        for (; ch + 4 <= channels; ch += 4)
+                        {
+                            vst1q_f32(&outputBuffer[writeIdx + ch], zero);
+                        }
+                        // Scalar remainder
+                        for (; ch < channels; ++ch)
+                        {
+                            outputBuffer[writeIdx + ch] = 0.0f;
+                        }
+#else
+                        // Scalar fallback
                         for (int ch = 0; ch < channels; ++ch)
                         {
-                            size_t writeIdx = outIdx * channels + ch;
-                            ASSERT_BOUNDS(writeIdx, outputSize, "ZERO_FILL output write");
-                            outputBuffer[writeIdx] = 0.0f;
+                            outputBuffer[writeIdx + ch] = 0.0f;
                         }
-                        break;
+#endif
+                    }
+                    break;
 
                     case GapPolicy::HOLD:
                         // Hold last valid value before gap
@@ -260,7 +306,7 @@ namespace dsp
                             float t0 = timestamps[gapStart * channels];
                             float t1 = timestamps[gapEnd * channels];
                             float denominator = t1 - t0;
-                            
+
                             // Protection against division by zero
                             if (std::abs(denominator) < 1e-6f)
                             {
@@ -632,6 +678,138 @@ namespace dsp
 
             size_t centerIdx = findBracketingInterval(targetTime, timestamps, numSamples, channels, searchStart);
 
+#if defined(HAS_AVX2) || defined(HAS_SSE) || defined(HAS_NEON)
+            // SIMD-optimized path: Process 4 samples at a time
+            float values[windowSize] = {0};
+            float weights[windowSize] = {0};
+            int validCount = 0;
+
+            // Gather values and compute weights
+            for (int offset = -windowSize / 2; offset < windowSize / 2; ++offset)
+            {
+                int sampleIdx = static_cast<int>(centerIdx) + offset;
+                if (sampleIdx < 0 || sampleIdx >= static_cast<int>(numSamples))
+                    continue;
+
+                float t = timestamps[sampleIdx * channels];
+                float v = samples[sampleIdx * channels + channel];
+
+                // Sinc function: sin(π*x) / (π*x)
+                float x = (targetTime - t) * m_estimatedSampleRate / 1000.0f;
+                float sinc = (std::abs(x) < 1e-6f) ? 1.0f : std::sin(M_PI * x) / (M_PI * x);
+
+                // Hamming window
+                float window = 0.54f - 0.46f * std::cos(2.0f * M_PI * (offset + windowSize / 2.0f) / windowSize);
+
+                values[validCount] = v;
+                weights[validCount] = sinc * window;
+                validCount++;
+            }
+
+            // SIMD accumulation
+            float sum = 0.0f;
+            float weightSum = 0.0f;
+
+#if defined(HAS_AVX2)
+            __m256 vsum = _mm256_setzero_ps();
+            __m256 wsum = _mm256_setzero_ps();
+
+            int i = 0;
+            for (; i + 8 <= validCount; i += 8)
+            {
+                __m256 v = _mm256_loadu_ps(&values[i]);
+                __m256 w = _mm256_loadu_ps(&weights[i]);
+                vsum = _mm256_fmadd_ps(v, w, vsum); // sum += v * w
+                wsum = _mm256_add_ps(wsum, w);
+            }
+
+            // Horizontal sum for AVX2
+            __m128 vsum_low = _mm256_castps256_ps128(vsum);
+            __m128 vsum_high = _mm256_extractf128_ps(vsum, 1);
+            __m128 vsum128 = _mm_add_ps(vsum_low, vsum_high);
+
+            __m128 wsum_low = _mm256_castps256_ps128(wsum);
+            __m128 wsum_high = _mm256_extractf128_ps(wsum, 1);
+            __m128 wsum128 = _mm_add_ps(wsum_low, wsum_high);
+
+            // Continue with SSE reduction
+            vsum128 = _mm_hadd_ps(vsum128, vsum128);
+            vsum128 = _mm_hadd_ps(vsum128, vsum128);
+            sum = _mm_cvtss_f32(vsum128);
+
+            wsum128 = _mm_hadd_ps(wsum128, wsum128);
+            wsum128 = _mm_hadd_ps(wsum128, wsum128);
+            weightSum = _mm_cvtss_f32(wsum128);
+
+            // Scalar remainder
+            for (; i < validCount; ++i)
+            {
+                sum += values[i] * weights[i];
+                weightSum += weights[i];
+            }
+#elif defined(HAS_SSE)
+            __m128 vsum = _mm_setzero_ps();
+            __m128 wsum = _mm_setzero_ps();
+
+            int i = 0;
+            for (; i + 4 <= validCount; i += 4)
+            {
+                __m128 v = _mm_loadu_ps(&values[i]);
+                __m128 w = _mm_loadu_ps(&weights[i]);
+                vsum = _mm_add_ps(vsum, _mm_mul_ps(v, w));
+                wsum = _mm_add_ps(wsum, w);
+            }
+
+            // Horizontal sum
+            vsum = _mm_hadd_ps(vsum, vsum);
+            vsum = _mm_hadd_ps(vsum, vsum);
+            sum = _mm_cvtss_f32(vsum);
+
+            wsum = _mm_hadd_ps(wsum, wsum);
+            wsum = _mm_hadd_ps(wsum, wsum);
+            weightSum = _mm_cvtss_f32(wsum);
+
+            // Scalar remainder
+            for (; i < validCount; ++i)
+            {
+                sum += values[i] * weights[i];
+                weightSum += weights[i];
+            }
+#elif defined(HAS_NEON)
+            float32x4_t vsum = vdupq_n_f32(0.0f);
+            float32x4_t wsum = vdupq_n_f32(0.0f);
+
+            int i = 0;
+            for (; i + 4 <= validCount; i += 4)
+            {
+                float32x4_t v = vld1q_f32(&values[i]);
+                float32x4_t w = vld1q_f32(&weights[i]);
+                vsum = vmlaq_f32(vsum, v, w); // vsum += v * w
+                wsum = vaddq_f32(wsum, w);
+            }
+
+            // Horizontal sum
+            float32x2_t vsum_low = vget_low_f32(vsum);
+            float32x2_t vsum_high = vget_high_f32(vsum);
+            float32x2_t vsum_pair = vadd_f32(vsum_low, vsum_high);
+            sum = vget_lane_f32(vpadd_f32(vsum_pair, vsum_pair), 0);
+
+            float32x2_t wsum_low = vget_low_f32(wsum);
+            float32x2_t wsum_high = vget_high_f32(wsum);
+            float32x2_t wsum_pair = vadd_f32(wsum_low, wsum_high);
+            weightSum = vget_lane_f32(vpadd_f32(wsum_pair, wsum_pair), 0);
+
+            // Scalar remainder
+            for (; i < validCount; ++i)
+            {
+                sum += values[i] * weights[i];
+                weightSum += weights[i];
+            }
+#endif
+
+            output = (weightSum > 0.0f) ? (sum / weightSum) : 0.0f;
+#else
+            // Scalar fallback
             float sum = 0.0f;
             float weightSum = 0.0f;
 
@@ -645,7 +823,7 @@ namespace dsp
                 float v = samples[sampleIdx * channels + channel];
 
                 // Sinc function: sin(π*x) / (π*x)
-                float x = (targetTime - t) * m_estimatedSampleRate / 1000.0f; // Normalize by sample rate
+                float x = (targetTime - t) * m_estimatedSampleRate / 1000.0f;
                 float sinc = (std::abs(x) < 1e-6f) ? 1.0f : std::sin(M_PI * x) / (M_PI * x);
 
                 // Hamming window
@@ -657,6 +835,7 @@ namespace dsp
             }
 
             output = (weightSum > 0.0f) ? (sum / weightSum) : 0.0f;
+#endif
             searchStart = centerIdx;
         }
 
