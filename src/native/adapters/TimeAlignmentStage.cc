@@ -719,7 +719,7 @@ namespace dsp
             {
                 __m256 v = _mm256_loadu_ps(&values[i]);
                 __m256 w = _mm256_loadu_ps(&weights[i]);
-                vsum = _mm256_fmadd_ps(v, w, vsum); // sum += v * w
+                vsum = _mm256_add_ps(vsum, _mm256_mul_ps(v, w)); // sum += v * w
                 wsum = _mm256_add_ps(wsum, w);
             }
 
