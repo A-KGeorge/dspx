@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.1
+
+### Patch Changes
+
+- [`f9bcc15`](https://github.com/A-KGeorge/dspx/commit/f9bcc1513e5f82dfb3b5ac7ae25c1248dc5e5e5e) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Added retries
+
 ## 1.4.0
 
 ### Minor Changes
