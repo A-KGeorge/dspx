@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.3
+
+### Patch Changes
+
+- [`ea5ef57`](https://github.com/A-KGeorge/dspx/commit/ea5ef57041b1ee62c43d2787306de9f0d8b33cb5) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - optimized toon
+
 ## 1.4.2
 
 ### Patch Changes
