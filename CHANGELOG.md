@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.4
+
+### Patch Changes
+
+- [`da389c5`](https://github.com/A-KGeorge/dspx/commit/da389c506f79e51c0c8381a50e1607bd04be4800) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - fix for stale build
+
 ## 1.4.3
 
 ### Patch Changes
