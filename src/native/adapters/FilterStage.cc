@@ -401,12 +401,13 @@ namespace dsp::adapters
         {
             for (int32_t i = 0; i < numChannels && i < static_cast<int32_t>(m_firFilters.size()); ++i)
             {
-                std::vector<float> stateBuffer = d.readFloatArray();
+                auto stateSpan = d.readFloatSpan();
                 int32_t stateIndex = d.readInt32();
 
-                if (m_firFilters[i] && !stateBuffer.empty())
+                if (m_firFilters[i] && !stateSpan.empty())
                 {
-                    m_firFilters[i]->setState(stateBuffer, static_cast<size_t>(stateIndex));
+                    // Zero-copy: pass span directly to setState
+                    m_firFilters[i]->setState(stateSpan, static_cast<size_t>(stateIndex));
                 }
             }
         }
@@ -414,12 +415,13 @@ namespace dsp::adapters
         {
             for (int32_t i = 0; i < numChannels && i < static_cast<int32_t>(m_iirFilters.size()); ++i)
             {
-                std::vector<float> xState = d.readFloatArray();
-                std::vector<float> yState = d.readFloatArray();
+                auto xSpan = d.readFloatSpan();
+                auto ySpan = d.readFloatSpan();
 
-                if (m_iirFilters[i] && !xState.empty())
+                if (m_iirFilters[i] && !xSpan.empty())
                 {
-                    m_iirFilters[i]->setState(xState, yState);
+                    // Zero-copy: pass spans directly to setState
+                    m_iirFilters[i]->setState(xSpan, ySpan);
                 }
             }
         }

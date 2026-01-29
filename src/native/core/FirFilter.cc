@@ -343,6 +343,29 @@ namespace dsp
             m_stateIndex = stateIndex;
         }
 
+        template <typename T>
+        void FirFilter<T>::setState(std::span<const T> state, size_t stateIndex)
+        {
+            if (!m_stateful)
+            {
+                throw std::runtime_error("setState() requires stateful mode");
+            }
+
+            // Validate size - must match the power-of-2 buffer size, not coefficient count
+            if (state.size() != m_state.size())
+            {
+                throw std::invalid_argument("state size must match internal buffer size");
+            }
+            if (stateIndex >= state.size() && !state.empty())
+            {
+                throw std::invalid_argument("stateIndex out of range");
+            }
+
+            // Zero-copy: assign from span
+            std::copy(state.begin(), state.end(), m_state.begin());
+            m_stateIndex = stateIndex;
+        }
+
         // ========== Filter Design Methods ==========
 
         template <typename T>

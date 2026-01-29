@@ -16,6 +16,7 @@
 #define DSP_CORE_FIR_FILTER_H
 
 #include <vector>
+#include <span>
 #include <cstddef>
 #include <memory>
 #include "../utils/CircularBufferArray.h"
@@ -99,6 +100,13 @@ namespace dsp
              * @param stateIndex Current position in circular buffer
              */
             void setState(const std::vector<T> &state, size_t stateIndex);
+
+            /**
+             * Set internal state from span (zero-copy deserialization)
+             * @param state State buffer span (zero-copy)
+             * @param stateIndex Current position in circular buffer
+             */
+            void setState(std::span<const T> state, size_t stateIndex);
 
             // ========== Common FIR Filter Designs ==========
 

@@ -19,6 +19,7 @@
 #define DSP_CORE_IIR_FILTER_H
 
 #include <vector>
+#include <span>
 #include <cstddef>
 #include <memory>
 
@@ -109,6 +110,13 @@ namespace dsp
              * @param y_state Output history buffer
              */
             void setState(const std::vector<T> &x_state, const std::vector<T> &y_state);
+
+            /**
+             * Set internal state from spans (zero-copy deserialization)
+             * @param x_state Input history buffer span (zero-copy)
+             * @param y_state Output history buffer span (zero-copy)
+             */
+            void setState(std::span<const T> x_state, std::span<const T> y_state);
 
             // ========== Common IIR Filter Designs ==========
 

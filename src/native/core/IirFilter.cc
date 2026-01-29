@@ -284,6 +284,32 @@ namespace dsp
             m_y_index = 0;
         }
 
+        template <typename T>
+        void IirFilter<T>::setState(std::span<const T> x_state, std::span<const T> y_state)
+        {
+            if (!m_stateful)
+            {
+                throw std::runtime_error("setState() requires stateful mode");
+            }
+
+            // Accept circular buffer state (should match power-of-2 size)
+            if (x_state.size() != m_x_state.size())
+            {
+                throw std::invalid_argument("x_state size must match circular buffer size");
+            }
+            if (y_state.size() != m_y_state.size())
+            {
+                throw std::invalid_argument("y_state size must match circular buffer size");
+            }
+
+            // Zero-copy: assign from spans
+            std::copy(x_state.begin(), x_state.end(), m_x_state.begin());
+            std::copy(y_state.begin(), y_state.end(), m_y_state.begin());
+            // Indices reset to 0 for consistency (caller can restore indices if needed)
+            m_x_index = 0;
+            m_y_index = 0;
+        }
+
         // ========== Filter Design Methods ==========
 
         template <typename T>
