@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.6
+
+### Patch Changes
+
+- [`27b1537`](https://github.com/A-KGeorge/dspx/commit/27b15375c315a99cc6bfad87dd13b7e99cea395d) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Fix prebuild
+
 ## 1.4.4
 
 ### Patch Changes
