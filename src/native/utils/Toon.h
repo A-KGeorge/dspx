@@ -24,6 +24,49 @@ namespace dsp
 {
     namespace toon
     {
+// C++20-compatible byteswap (std::byteswap is C++23)
+#if __cplusplus >= 202302L
+        // C++23: use std::byteswap
+        using std::byteswap;
+#else
+        // C++20 fallback: implement byteswap
+        template <typename T>
+        constexpr T byteswap(T value) noexcept
+        {
+            static_assert(std::is_integral_v<T>, "byteswap requires integral type");
+
+            if constexpr (sizeof(T) == 1)
+            {
+                return value;
+            }
+            else if constexpr (sizeof(T) == 2)
+            {
+                return static_cast<T>(
+                    ((value >> 8) & 0x00FF) |
+                    ((value << 8) & 0xFF00));
+            }
+            else if constexpr (sizeof(T) == 4)
+            {
+                return static_cast<T>(
+                    ((value >> 24) & 0x000000FFUL) |
+                    ((value >> 8) & 0x0000FF00UL) |
+                    ((value << 8) & 0x00FF0000UL) |
+                    ((value << 24) & 0xFF000000UL));
+            }
+            else if constexpr (sizeof(T) == 8)
+            {
+                return static_cast<T>(
+                    ((value >> 56) & 0x00000000000000FFULL) |
+                    ((value >> 40) & 0x000000000000FF00ULL) |
+                    ((value >> 24) & 0x0000000000FF0000ULL) |
+                    ((value >> 8) & 0x00000000FF000000ULL) |
+                    ((value << 8) & 0x000000FF00000000ULL) |
+                    ((value << 24) & 0x0000FF0000000000ULL) |
+                    ((value << 40) & 0x00FF000000000000ULL) |
+                    ((value << 56) & 0xFF00000000000000ULL));
+            }
+        }
+#endif
 
         // TOON Protocol Tokens
         enum Token : uint8_t
@@ -51,20 +94,20 @@ namespace dsp
             }
             else
             {
-                // Big-endian: swap to little-endian (C++23)
+                // Big-endian: swap to little-endian
                 if constexpr (std::is_same_v<T, float>)
                 {
                     auto bits = std::bit_cast<uint32_t>(value);
-                    return std::bit_cast<float>(std::byteswap(bits));
+                    return std::bit_cast<float>(byteswap(bits));
                 }
                 else if constexpr (std::is_same_v<T, double>)
                 {
                     auto bits = std::bit_cast<uint64_t>(value);
-                    return std::bit_cast<double>(std::byteswap(bits));
+                    return std::bit_cast<double>(byteswap(bits));
                 }
                 else
                 {
-                    return std::byteswap(value); // For int32_t and other integral types
+                    return byteswap(value); // For int32_t and other integral types
                 }
             }
         }
@@ -123,7 +166,7 @@ namespace dsp
             for (; i < count; ++i)
             {
                 auto bits = std::bit_cast<uint32_t>(src[i]);
-                dst[i] = std::bit_cast<float>(std::byteswap(bits));
+                dst[i] = std::bit_cast<float>(byteswap(bits));
             }
         }
 
