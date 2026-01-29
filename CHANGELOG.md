@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.2
+
+### Patch Changes
+
+- [`8fc6325`](https://github.com/A-KGeorge/dspx/commit/8fc6325e1437ae9607e4b2596e0ba8dd43c4b231) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - SIMD optimize Time ALignment extrapolators
+
 ## 1.4.1
 
 ### Patch Changes
