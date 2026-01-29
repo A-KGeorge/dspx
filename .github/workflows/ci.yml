@@ -194,6 +194,7 @@ jobs:
     permissions:
       contents: write # To create release tags and GitHub releases
       pull-requests: write # To create the versioning PR (if you use it)
+      id-token: write # Required for OIDC trusted publishing to npm
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -205,6 +206,13 @@ jobs:
         with:
           node-version: 22.x
           cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify npm version for trusted publishing
+        run: |
+          NPM_VERSION=$(npm --version)
+          echo "📦 npm version: $NPM_VERSION"
+          echo "✅ Trusted publishing requires npm >= 11.5.1"
 
       - name: Install dependencies
         run: npm ci
@@ -246,12 +254,14 @@ jobs:
           # This runs "npm run version" to create the PR
           version: npm run version
           # This runs "npm run publish-packages" AFTER the PR is merged
+          # Uses OIDC trusted publishing (no NPM_TOKEN needed!)
           publish: npm run publish-packages
           commit: "ci(release): version packages"
           title: "ci(release): version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # NPM_TOKEN not needed with trusted publishing!
+          # npm CLI will automatically use OIDC authentication
 
   # 🧹 Lint and Type Check
   lint:
