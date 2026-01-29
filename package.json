@@ -22,6 +22,7 @@
     "build:native": "node-gyp rebuild",
     "build": "npm run build:native && npm run build:ts",
     "prebuildify": "prebuildify --napi --strip --target 18.0.0 --target 20.0.0 --target 22.0.0",
+    "prepublishOnly": "npm run build:ts",
     "changeset": "changeset",
     "version": "changeset version",
     "publish-packages": "changeset publish"
