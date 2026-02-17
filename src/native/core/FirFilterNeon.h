@@ -233,58 +233,56 @@ namespace dsp::core
          */
         std::pair<std::vector<float>, size_t> exportLinearState() const
         {
-#if defined(__ARM_NEON) || defined(__aarch64__)
             const float *state = getState();
             std::vector<float> linearState(m_bufferSize, 0.0f);
 
-            // Calculate oldest sample position in circular buffer
-            size_t oldestPos = (m_head >= m_numTaps - 1)
-                                   ? m_head - (m_numTaps - 1)
-                                   : m_head + m_bufferSize - (m_numTaps - 1);
+            // Extract the circular buffer into linear format (oldest->newest)
+            // m_head points to the position of the most recent sample
+            // The convolution reads from (m_head - numTaps + 1), which is the oldest sample position
 
-            // Un-rotate: copy from oldest->newest into linear array
+            // Calculate the read start position (oldest valid sample)
+            size_t readStart = (m_head + m_bufferSize - m_numTaps + 1) & m_headMask;
+
+            // Copy samples in order: oldest->newest into linear positions [0..bufferSize-1]
             for (size_t i = 0; i < m_bufferSize; ++i)
             {
-                linearState[i] = state[(oldestPos + i) & m_headMask];
+                linearState[i] = state[(readStart + i) & m_headMask];
             }
 
-            return {linearState, m_numTaps - 1};
-#else
-            // Scalar path: state is already linear
-            const float *state = getState();
-            std::vector<float> linearState(state, state + m_bufferSize);
-            return {linearState, m_head};
-#endif
+            // Return the number of valid samples as stateIndex
+            // In linear representation, oldest sample is at index 0, newest at m_numTaps-1
+            // Next write position would be at m_numTaps
+            return {linearState, m_numTaps};
         }
 
         /**
          * @brief Import state from linear format (oldest->newest) after deserialization
          * @param linearState Linear state vector (oldest->newest)
-         * @param stateIndex State index (number of valid samples - 1)
+         * @param stateIndex State index (next write position in linear format)
          */
         void importLinearState(const std::vector<float> &linearState, size_t stateIndex)
         {
-#if defined(__ARM_NEON) || defined(__aarch64__)
             float *state = getState();
 
-            // Copy linear state into circular buffer
+            // Copy the linear state directly into the circular buffer starting at position 0
+            // This creates a "linearized" layout where oldest is at 0, newest at numTaps-1
             for (size_t i = 0; i < m_bufferSize && i < linearState.size(); ++i)
             {
                 state[i] = linearState[i];
                 state[i + m_bufferSize] = linearState[i]; // Guard zone
             }
 
-            // Set head to point where newest sample will be written
-            m_head = stateIndex;
-#else
-            // Scalar path: direct copy
-            float *state = getState();
-            for (size_t i = 0; i < m_bufferSize && i < linearState.size(); ++i)
+            // Position m_head to the last valid sample (newest)
+            // Since we copied linearly with oldest at 0, newest is at (numTaps - 1)
+            // m_head should point to where the most recent sample was written
+            if (stateIndex > 0 && stateIndex <= m_numTaps)
             {
-                state[i] = linearState[i];
+                m_head = stateIndex - 1;
             }
-            m_head = stateIndex;
-#endif
+            else
+            {
+                m_head = (m_numTaps > 0) ? (m_numTaps - 1) : 0;
+            }
         }
 
         size_t getNumTaps() const { return m_numTaps; }
