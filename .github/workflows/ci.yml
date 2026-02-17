@@ -150,7 +150,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-20.04, windows-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -194,6 +194,7 @@ jobs:
     permissions:
       contents: write # To create release tags and GitHub releases
       pull-requests: write # To create the versioning PR (if you use it)
+      id-token: write # Required for npm OIDC trusted publishing
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -205,6 +206,7 @@ jobs:
         with:
           node-version: 22.x
           cache: "npm"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
         run: npm ci
@@ -216,7 +218,7 @@ jobs:
       - name: Download prebuilds (Linux)
         uses: actions/download-artifact@v4
         with:
-          name: prebuilds-ubuntu-latest
+          name: prebuilds-ubuntu-20.04
           path: prebuilds/
 
       - name: Download prebuilds (macOS)
@@ -251,7 +253,7 @@ jobs:
           title: "ci(release): version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: true
 
   # 🧹 Lint and Type Check
   lint:

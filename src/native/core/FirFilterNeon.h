@@ -227,6 +227,66 @@ namespace dsp::core
             m_samplesProcessed = 0;
         }
 
+        /**
+         * @brief Export state in linear format (oldest->newest) for serialization
+         * @return Pair of linear state vector and state index
+         */
+        std::pair<std::vector<float>, size_t> exportLinearState() const
+        {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            const float *state = getState();
+            std::vector<float> linearState(m_bufferSize, 0.0f);
+
+            // Calculate oldest sample position in circular buffer
+            size_t oldestPos = (m_head >= m_numTaps - 1)
+                                   ? m_head - (m_numTaps - 1)
+                                   : m_head + m_bufferSize - (m_numTaps - 1);
+
+            // Un-rotate: copy from oldest->newest into linear array
+            for (size_t i = 0; i < m_bufferSize; ++i)
+            {
+                linearState[i] = state[(oldestPos + i) & m_headMask];
+            }
+
+            return {linearState, m_numTaps - 1};
+#else
+            // Scalar path: state is already linear
+            const float *state = getState();
+            std::vector<float> linearState(state, state + m_bufferSize);
+            return {linearState, m_head};
+#endif
+        }
+
+        /**
+         * @brief Import state from linear format (oldest->newest) after deserialization
+         * @param linearState Linear state vector (oldest->newest)
+         * @param stateIndex State index (number of valid samples - 1)
+         */
+        void importLinearState(const std::vector<float> &linearState, size_t stateIndex)
+        {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            float *state = getState();
+
+            // Copy linear state into circular buffer
+            for (size_t i = 0; i < m_bufferSize && i < linearState.size(); ++i)
+            {
+                state[i] = linearState[i];
+                state[i + m_bufferSize] = linearState[i]; // Guard zone
+            }
+
+            // Set head to point where newest sample will be written
+            m_head = stateIndex;
+#else
+            // Scalar path: direct copy
+            float *state = getState();
+            for (size_t i = 0; i < m_bufferSize && i < linearState.size(); ++i)
+            {
+                state[i] = linearState[i];
+            }
+            m_head = stateIndex;
+#endif
+        }
+
         size_t getNumTaps() const { return m_numTaps; }
         size_t getBufferSize() const { return m_bufferSize; }
 

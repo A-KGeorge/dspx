@@ -93,7 +93,7 @@
             'OTHER_CPLUSPLUSFLAGS+': [ '-msse3', '-mavx', '-mavx2' ]
           }
         }],
-        # Condition for arm64 architecture (Android, iOS, M1/M2 Macs, Tensor G4, etc.)
+        # Condition for arm64 architecture (Android, iOS, M1/M2 Macs, etc.)
         ['target_arch=="arm64"', {
           # ARMv8-a baseline: NEON + FP support (compatible with all ARMv8 CPUs)
           "cflags+": [ "-march=armv8-a+fp+simd" ],

@@ -21,7 +21,7 @@
     "build:ts": "tsc",
     "build:native": "node-gyp rebuild",
     "build": "npm run build:native && npm run build:ts",
-    "prebuildify": "prebuildify --napi --strip --target 18.0.0 --target 20.0.0 --target 22.0.0",
+    "prebuildify": "prebuildify --napi --strip --target 18.0.0 --target 20.0.0 --target 22.0.0 --target 24.0.0",
     "changeset": "changeset",
     "version": "changeset version",
     "publish-packages": "changeset publish"
@@ -47,6 +47,10 @@
   "author": "Alan Kochukalam George",
   "license": "Apache-2.0",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=11.5.1"
+  },
   "dependencies": {
     "cross-env": "^7.0.3",
     "node-addon-api": "^8.5.0",

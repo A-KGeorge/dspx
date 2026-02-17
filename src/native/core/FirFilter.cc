@@ -318,6 +318,19 @@ namespace dsp
         template <typename T>
         std::pair<std::vector<T>, size_t> FirFilter<T>::getState() const
         {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            if (m_useNeon && m_neonFilter)
+            {
+                // Use NEON filter's linearization on ARM
+                auto [linearState, stateIndex] = m_neonFilter->exportLinearState();
+                std::vector<T> state(linearState.size());
+                for (size_t i = 0; i < linearState.size(); ++i)
+                {
+                    state[i] = static_cast<T>(linearState[i]);
+                }
+                return {state, stateIndex};
+            }
+#endif
             return {m_state, m_stateIndex};
         }
 
@@ -339,6 +352,19 @@ namespace dsp
                 throw std::invalid_argument("stateIndex out of range");
             }
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            if (m_useNeon && m_neonFilter)
+            {
+                // Convert to float vector for NEON filter's linearization
+                std::vector<float> floatState(state.size());
+                for (size_t i = 0; i < state.size(); ++i)
+                {
+                    floatState[i] = static_cast<float>(state[i]);
+                }
+                m_neonFilter->importLinearState(floatState, stateIndex);
+                return;
+            }
+#endif
             m_state = state;
             m_stateIndex = stateIndex;
         }
