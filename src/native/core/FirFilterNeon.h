@@ -249,16 +249,15 @@ namespace dsp::core
                 linearState[i] = state[(readStart + i) & m_headMask];
             }
 
-            // Return the number of valid samples as stateIndex
-            // In linear representation, oldest sample is at index 0, newest at m_numTaps-1
-            // Next write position would be at m_numTaps
-            return {linearState, m_numTaps};
+            // Return 0 as stateIndex to indicate the next write should go to position 0
+            // (overwriting the oldest sample in the linear layout)
+            return {linearState, 0};
         }
 
         /**
          * @brief Import state from linear format (oldest->newest) after deserialization
          * @param linearState Linear state vector (oldest->newest)
-         * @param stateIndex State index (next write position in linear format)
+         * @param stateIndex State index (must be 0 for linear layout)
          */
         void importLinearState(const std::vector<float> &linearState, size_t stateIndex)
         {
@@ -272,17 +271,10 @@ namespace dsp::core
                 state[i + m_bufferSize] = linearState[i]; // Guard zone
             }
 
-            // Position m_head to the last valid sample (newest)
-            // Since we copied linearly with oldest at 0, newest is at (numTaps - 1)
-            // m_head should point to where the most recent sample was written
-            if (stateIndex > 0 && stateIndex <= m_numTaps)
-            {
-                m_head = stateIndex - 1;
-            }
-            else
-            {
-                m_head = (m_numTaps > 0) ? (m_numTaps - 1) : 0;
-            }
+            // Set m_head to (bufferSize - 1) so that the next increment will wrap to 0
+            // This ensures the next sample overwrites position 0 (the oldest sample)
+            // Since processSample increments BEFORE writing: (m_bufferSize - 1 + 1) & mask = 0
+            m_head = m_bufferSize - 1;
         }
 
         size_t getNumTaps() const { return m_numTaps; }
