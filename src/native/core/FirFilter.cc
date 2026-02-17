@@ -342,19 +342,19 @@ namespace dsp
                 throw std::runtime_error("setState() requires stateful mode");
             }
 
-            // Validate size - must match the power-of-2 buffer size, not coefficient count
-            if (state.size() != m_state.size())
-            {
-                throw std::invalid_argument("state size must match internal buffer size");
-            }
-            if (stateIndex >= state.size() && !state.empty())
-            {
-                throw std::invalid_argument("stateIndex out of range");
-            }
-
 #if defined(__ARM_NEON) || defined(__aarch64__)
             if (m_useNeon && m_neonFilter)
             {
+                // Validate against NEON buffer size on ARM
+                if (state.size() != m_neonFilter->getBufferSize())
+                {
+                    throw std::invalid_argument("state size must match internal buffer size");
+                }
+                if (stateIndex >= state.size() && !state.empty())
+                {
+                    throw std::invalid_argument("stateIndex out of range");
+                }
+
                 // Convert to float vector for NEON filter's linearization
                 std::vector<float> floatState(state.size());
                 for (size_t i = 0; i < state.size(); ++i)
@@ -365,6 +365,17 @@ namespace dsp
                 return;
             }
 #endif
+
+            // Validate size - must match the power-of-2 buffer size, not coefficient count
+            if (state.size() != m_state.size())
+            {
+                throw std::invalid_argument("state size must match internal buffer size");
+            }
+            if (stateIndex >= state.size() && !state.empty())
+            {
+                throw std::invalid_argument("stateIndex out of range");
+            }
+
             m_state = state;
             m_stateIndex = stateIndex;
         }
