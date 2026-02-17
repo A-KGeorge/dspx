@@ -271,10 +271,11 @@ namespace dsp::core
                 state[i + m_bufferSize] = linearState[i]; // Guard zone
             }
 
-            // Set m_head to (bufferSize - 1) so that the next increment will wrap to 0
-            // This ensures the next sample overwrites position 0 (the oldest sample)
-            // Since processSample increments BEFORE writing: (m_bufferSize - 1 + 1) & mask = 0
-            m_head = m_bufferSize - 1;
+            // Set m_head to point to the newest sample position
+            // After linear import: oldest is at 0, newest is at (numTaps - 1)
+            // m_head should point to where the most recent sample is located
+            // Next write will be at (m_head + 1) which overwrites the oldest sample at position 0
+            m_head = (m_numTaps > 0) ? (m_numTaps - 1) : 0;
         }
 
         size_t getNumTaps() const { return m_numTaps; }
