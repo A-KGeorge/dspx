@@ -271,11 +271,11 @@ namespace dsp::core
                 state[i + m_bufferSize] = linearState[i]; // Guard zone
             }
 
-            // Set m_head so the next write goes to position 0 (overwriting oldest)
-            // After import: oldest=0, newest=(numTaps-1), next should overwrite position 0
-            // Since processSample does: m_head = (m_head + 1) & mask
-            // We need: (m_bufferSize - 1 + 1) & mask = 0
-            m_head = m_bufferSize - 1;
+            // Set m_head to point to the newest sample (last valid position)
+            // After import: oldest=0, newest=(numTaps-1)
+            // m_head should point to position (numTaps - 1)
+            // Next write will go to position numTaps, which is correct
+            m_head = (m_numTaps > 0) ? (m_numTaps - 1) : 0;
 
             // Mark buffer as filled so we don't return zeros during transient phase
             m_samplesProcessed = m_numTaps;
