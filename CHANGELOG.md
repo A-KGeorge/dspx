@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.9
+
+### Patch Changes
+
+- [`17b9b6c`](https://github.com/A-KGeorge/dspx/commit/17b9b6cf1ade65f9785667de1041367cc9ca704e) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Fix fir neon load state
+
 ## 1.4.3
 
 ### Patch Changes
