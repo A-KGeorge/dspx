@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.3
+
+### Patch Changes
+
+- [`0b7a9a9`](https://github.com/A-KGeorge/dspx/commit/0b7a9a93ecbdb86c97eadcf5d5aa8b1d1641bce8) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Fix neon fir state serialization
+
 ## 1.4.2
 
 ### Patch Changes
