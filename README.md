@@ -11,6 +11,8 @@
 
 A modern DSP library built for Node.js backends processing real-time biosignals, audio streams, and sensor data. Features native C++ filters with full state serialization (to Redis, S3, or any storage backend), enabling seamless processing across service restarts and distributed workers.
 
+[View the benchmarks](https://github.com/A-KGeorge/dspx-benchmark/)
+
 ---
 
 ## ✨ Features
@@ -475,7 +477,7 @@ const clean = notch.process(noisySignal);
 import { createDspPipeline, Convolution } from "dspx";
 const pipeline = createDspPipeline();
 pipeline.addStage(
-  new Convolution({ kernel: OPTIMAL_LOWPASS_COEFFS.cutoff_0_2 })
+  new Convolution({ kernel: OPTIMAL_LOWPASS_COEFFS.cutoff_0_2 }),
 );
 
 // ✅ Zero Python dependency - coefficients ship with the library!
@@ -1661,7 +1663,7 @@ const saveBreaker = new CircuitBreaker(
     timeout: 2000, // Fail if >2s
     errorThresholdPercentage: 50, // Trip after 50% failures
     resetTimeout: 30000, // Try recovery after 30s
-  }
+  },
 );
 
 saveBreaker.fallback(() => {
