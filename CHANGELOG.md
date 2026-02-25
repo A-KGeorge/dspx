@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.11
+
+### Patch Changes
+
+- [`7fbd4ff`](https://github.com/A-KGeorge/dspx/commit/7fbd4ff9bc9b406fdcb104b2a5338cc699be4bb8) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - Optimized IIR/FIR for large inputs
+
 ## 1.4.10
 
 ### Patch Changes
