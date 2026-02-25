@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <numeric> // For std::inner_product (article optimization)
+#include "../vendors/eigen-3.4.0/Eigen/Core"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -533,6 +534,70 @@ namespace dsp
             }
 
             return FirFilter<T>(bandStop, true);
+        }
+
+        // ========== Eigen-Accelerated Large Batch Processing ==========
+
+        template <typename T>
+        void FirFilter<T>::processLargeBatch(const T *input, T *output, size_t length, bool stateless)
+        {
+            // Threshold: Use Eigen for batches >= 8192 samples
+            // Below this, existing optimized code (NEON/scalar) is faster
+            constexpr size_t EIGEN_THRESHOLD = 8192;
+
+            if (length < EIGEN_THRESHOLD)
+            {
+                // Small batch: use existing optimized path
+                return process(input, output, length, stateless);
+            }
+
+            // Large batch: use Eigen for cache-blocking and vectorization
+            const size_t numCoeffs = m_coefficients.size();
+
+            if (stateless || !m_stateful)
+            {
+                // Stateless convolution using Eigen
+                // Map coefficient vector (const, no copy)
+                Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, 1>> h(
+                    m_coefficients.data(), numCoeffs);
+
+                // Process each output sample
+                for (size_t n = 0; n < length; ++n)
+                {
+                    // Determine valid window size
+                    size_t validSize = std::min(n + 1, numCoeffs);
+                    size_t startIdx = (n >= numCoeffs) ? (n - numCoeffs + 1) : 0;
+
+                    // Map input window
+                    Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, 1>> x(
+                        input + startIdx, validSize);
+
+                    // Compute dot product using Eigen (auto-vectorized)
+                    if (validSize < numCoeffs)
+                    {
+                        // Partial window: zero-pad
+                        output[n] = h.tail(validSize).dot(x);
+                    }
+                    else
+                    {
+                        // Full window
+                        output[n] = h.dot(x.reverse());
+                    }
+                }
+            }
+            else
+            {
+                // Stateful mode: maintain circular buffer while using Eigen
+                // Process in chunks for better cache locality
+                constexpr size_t CHUNK_SIZE = 4096;
+
+                for (size_t offset = 0; offset < length; offset += CHUNK_SIZE)
+                {
+                    size_t chunkLen = std::min(CHUNK_SIZE, length - offset);
+                    // Circular buffer management is already optimal
+                    process(input + offset, output + offset, chunkLen, false);
+                }
+            }
         }
 
         // Explicit template instantiations

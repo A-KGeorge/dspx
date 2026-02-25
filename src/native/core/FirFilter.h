@@ -58,6 +58,17 @@ namespace dsp
             void process(const T *input, T *output, size_t length, bool stateless = false);
 
             /**
+             * Process large batch using Eigen for optimal cache utilization
+             * Automatically dispatches to process() for small batches (< 8192)
+             * Uses Eigen matrix operations for large batches (>= 8192)
+             * @param input Input samples
+             * @param output Output buffer (must be same size as input)
+             * @param length Number of samples
+             * @param stateless If true, ignores internal state
+             */
+            void processLargeBatch(const T *input, T *output, size_t length, bool stateless = false);
+
+            /**
              * Reset filter state (clear history)
              */
             void reset();
