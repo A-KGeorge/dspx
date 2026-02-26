@@ -1,5 +1,11 @@
 # dspx
 
+## 1.4.12
+
+### Patch Changes
+
+- [`f931869`](https://github.com/A-KGeorge/dspx/commit/f931869302ef06c793fae3c3d7858dfdf8fb6e00) Thanks [@A-KGeorge](https://github.com/A-KGeorge)! - added fir for x86 in convolution
+
 ## 1.4.11
 
 ### Patch Changes
