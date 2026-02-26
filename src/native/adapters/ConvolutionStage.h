@@ -5,7 +5,7 @@
 #include "../utils/ConvolutionPolicy.h"
 #include "../utils/SimdOps.h"
 #include "../core/FftEngine.h"
-#include "../core/FirFilterNeon.h"
+#include "../core/FirFilter.h"
 #include <vector>
 #include <string>
 #include <memory>
@@ -381,10 +381,12 @@ namespace dsp::adapters
         std::vector<float> m_temp_output_channel;
 
         // High-performance FIR filters for batch convolution (one per channel)
-        std::vector<std::unique_ptr<core::FirFilterNeon>> m_batch_fir_filters;
+        // Uses FirFilter which auto-selects NEON on ARM, optimized scalar/SSE on x86
+        std::vector<std::unique_ptr<core::FirFilter<float>>> m_batch_fir_filters;
 
         // High-performance FIR filters for moving/streaming convolution (one per channel)
-        std::vector<std::unique_ptr<core::FirFilterNeon>> m_moving_fir_filters;
+        // Uses FirFilter which auto-selects NEON on ARM, optimized scalar/SSE on x86
+        std::vector<std::unique_ptr<core::FirFilter<float>>> m_moving_fir_filters;
 
         // Reusable buffer for moving mode direct convolution (eliminates per-sample allocation)
         mutable std::vector<float> m_moving_temp_buffer;
@@ -657,12 +659,14 @@ namespace dsp::adapters
         /**
          * @brief Direct convolution in moving mode - Ultra high-performance version.
          *
-         * Uses FirFilterNeon with O(1) guard-zone circular buffer instead of
-         * the old O(N) memmove approach. Each channel maintains its own stateful
-         * FIR filter for true streaming processing.
+         * Uses FirFilter with architecture-specific optimizations:
+         * - ARM: NEON-accelerated with O(1) guard-zone circular buffer
+         * - x86: Auto-vectorized with double-buffered state for SSE/AVX
          *
-         * Key optimization: The FirFilterNeon class handles all state management
-         * with O(1) updates and fully vectorized NEON convolution.
+         * Each channel maintains its own stateful FIR filter for true streaming processing.
+         *
+         * Key optimization: The FirFilter class handles all state management
+         * with O(1) updates and fully vectorized SIMD convolution.
          */
         void processMovingDirect(float *buffer, size_t numSamples, int numChannels)
         {
@@ -675,12 +679,12 @@ namespace dsp::adapters
                 for (int ch = 0; ch < numChannels; ++ch)
                 {
                     m_moving_fir_filters.push_back(
-                        std::make_unique<core::FirFilterNeon>(m_kernel));
+                        std::make_unique<core::FirFilter<float>>(m_kernel, true));
                 }
             }
 
             // Process each channel with stateful FIR filter
-            // For interleaved data, we process per-sample but the FirFilterNeon
+            // For interleaved data, we process per-sample but the FirFilter
             // uses O(1) circular buffer updates (no memmove!)
             for (int ch = 0; ch < numChannels; ++ch)
             {

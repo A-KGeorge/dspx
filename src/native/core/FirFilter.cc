@@ -23,7 +23,7 @@ namespace dsp
 
         template <typename T>
         FirFilter<T>::FirFilter(const std::vector<T> &coefficients, bool stateful)
-            : m_coefficients(coefficients), m_stateIndex(0), m_stateMask(0), m_stateful(stateful), m_useDoubleBuffer(false)
+            : m_coefficients(coefficients), m_stateIndex(0), m_stateMask(0), m_samplesProcessed(0), m_stateful(stateful), m_useDoubleBuffer(false)
         {
             if (coefficients.empty())
             {
@@ -101,6 +101,15 @@ namespace dsp
                 // This enables contiguous SIMD reads without wrap-around logic
                 m_state[m_stateIndex] = input;
                 m_state[m_stateIndex + numCoeffs] = input; // Mirror to second half
+                m_samplesProcessed++;
+
+                // Return zero until buffer is filled (initial transient period)
+                if (m_samplesProcessed < numCoeffs)
+                {
+                    // Advance index (wrap within first half using modulo)
+                    m_stateIndex = (m_stateIndex + 1) % numCoeffs;
+                    return T(0);
+                }
 
                 // Compute convolution via std::inner_product (compiler auto-vectorizes)
                 // Read forward from stateIndex: oldest to newest sample
@@ -117,6 +126,15 @@ namespace dsp
             {
                 // Traditional circular buffer with manual loop unrolling
                 m_state[m_stateIndex] = input;
+                m_samplesProcessed++;
+
+                // Return zero until buffer is filled (initial transient period)
+                if (m_samplesProcessed < numCoeffs)
+                {
+                    // Advance circular buffer index (bitwise AND instead of modulo)
+                    m_stateIndex = (m_stateIndex + 1) & m_stateMask;
+                    return T(0);
+                }
 
                 T output = T(0);
                 size_t i = 0;
@@ -270,6 +288,7 @@ namespace dsp
             {
                 std::fill(m_state.begin(), m_state.end(), T(0));
                 m_stateIndex = 0;
+                m_samplesProcessed = 0;
             }
         }
 
@@ -379,6 +398,8 @@ namespace dsp
 
             m_state = state;
             m_stateIndex = stateIndex;
+            // Set samplesProcessed to coefficients size to indicate buffer is full
+            m_samplesProcessed = m_coefficients.size();
         }
 
         // ========== Filter Design Methods ==========

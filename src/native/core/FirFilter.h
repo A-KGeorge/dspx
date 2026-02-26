@@ -152,6 +152,7 @@ namespace dsp
             std::vector<T> m_state;        // Sample history (x[n-1], x[n-2], ..., x[n-M])
             size_t m_stateIndex;           // Current position in circular state buffer
             size_t m_stateMask;            // Bitmask for power-of-2 circular buffer (replaces modulo)
+            size_t m_samplesProcessed;     // Number of samples processed (for initial transient)
             bool m_stateful;               // Whether to maintain state between calls
             bool m_useDoubleBuffer;        // Use double-buffered state (article optimization)
 

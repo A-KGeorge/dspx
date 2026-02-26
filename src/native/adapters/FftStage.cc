@@ -539,6 +539,7 @@ namespace dsp
         void FftStage::deserializeToon(toon::Deserializer &deserializer)
         {
             size_t fftSize = static_cast<size_t>(deserializer.readInt32());
+            if (fftSize != m_fftSize)
             {
                 throw std::runtime_error("FFT size mismatch during TOON deserialization");
             }
